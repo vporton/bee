@@ -1174,7 +1174,316 @@ func TestStart(t *testing.T) {
 	})
 }
 
+<<<<<<< HEAD
 func newTestKademlia(t *testing.T, connCounter, failedConnCounter *int32, kadOpts kademlia.Options) (swarm.Address, *kademlia.Kad, addressbook.Interface, *mock.Discovery, beeCrypto.Signer) {
+=======
+func TestOutofDepthPrune(t *testing.T) {
+
+	defer func(p int) {
+		*kademlia.SaturationPeers = p
+	}(*kademlia.SaturationPeers)
+	*kademlia.SaturationPeers = 4
+
+	defer func(p int) {
+		*kademlia.OverSaturationPeers = p
+	}(*kademlia.OverSaturationPeers)
+	*kademlia.OverSaturationPeers = 8
+
+	var (
+		conns, failedConns int32 // how many connect calls were made to the p2p mock
+
+		pruneFuncImpl *func(uint8)
+		pruneMux      = sync.Mutex{}
+		pruneFunc     = func(depth uint8) {
+			pruneMux.Lock()
+			defer pruneMux.Unlock()
+			f := *pruneFuncImpl
+			f(depth)
+		}
+
+		base, kad, ab, _, signer = newTestKademlia(t, &conns, &failedConns, kademlia.Options{
+			PruneFunc: pruneFunc,
+		})
+	)
+
+	kad.SetRadius(swarm.MaxPO) // don't use radius for checks
+
+	// implement empty prune func
+	pruneMux.Lock()
+	pruneImpl := func(uint8) {}
+	pruneFuncImpl = &(pruneImpl)
+	pruneMux.Unlock()
+
+	if err := kad.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer kad.Close()
+
+	// bin 0,1 balanced, rest not
+	for i := 0; i < 6; i++ {
+		var peers []swarm.Address
+		if i < 2 {
+			peers = mineBin(t, base, i, 20, true)
+		} else {
+			peers = mineBin(t, base, i, 20, false)
+		}
+		for _, peer := range peers {
+			addOne(t, signer, kad, ab, peer)
+		}
+		time.Sleep(time.Millisecond * 10)
+		kDepth(t, kad, i)
+	}
+
+	// check that bin 0, 1 are balanced, but not 2
+	waitBalanced(t, kad, 0)
+	waitBalanced(t, kad, 1)
+	if kad.IsBalanced(2) {
+		t.Fatal("bin 2 should no be balanced")
+	}
+
+	// wait for kademlia connectors and pruning to finish
+	time.Sleep(time.Millisecond * 100)
+
+	// check that no pruning has happened
+	bins := binSizes(kad)
+	for i := 0; i < 6; i++ {
+		if bins[i] <= *kademlia.OverSaturationPeers {
+			t.Fatalf("bin %d, got %d, want more than %d", i, bins[i], *kademlia.OverSaturationPeers)
+		}
+	}
+
+	// set prune func to the default
+	pruneMux.Lock()
+	pruneImpl = func(depth uint8) {
+		kademlia.PruneOversaturatedBinsFunc(kad)(depth)
+	}
+	pruneFuncImpl = &(pruneImpl)
+	pruneMux.Unlock()
+
+	// add a peer to kick start pruning
+	addr := test.RandomAddressAt(base, 6)
+	addOne(t, signer, kad, ab, addr)
+
+	// wait for kademlia connectors and pruning to finish
+	time.Sleep(time.Millisecond * 100)
+
+	// check bins have been pruned
+	bins = binSizes(kad)
+	for i := uint8(0); i < 5; i++ {
+		if bins[i] != *kademlia.OverSaturationPeers {
+			t.Fatalf("bin %d, got %d, want %d", i, bins[i], *kademlia.OverSaturationPeers)
+		}
+	}
+
+	// check that bin 0,1 remains balanced after pruning
+	waitBalanced(t, kad, 0)
+	waitBalanced(t, kad, 1)
+}
+
+// TestLatency tests that kademlia polls peers for latency.
+func TestLatency(t *testing.T) {
+	var (
+		logger = logging.New(ioutil.Discard, 0)
+		base   = swarm.MustParseHexAddress("0000000000000000000000000000000000000000000000000000000000000000") // base is 0000
+		p1     = test.RandomAddress()
+
+		disc  = mock.NewDiscovery()
+		ab    = addressbook.New(mockstate.NewStateStore())
+		doneC = make(chan struct{})
+		once  sync.Once
+		ppm   = pingpongmock.New(func(_ context.Context, _ swarm.Address, _ ...string) (time.Duration, error) {
+			once.Do(func() { close(doneC) })
+			return 0, nil
+		})
+	)
+	metricsDB, err := shed.NewDB("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := metricsDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	kad, err := kademlia.New(base, ab, disc, p2pMock(ab, nil, nil, nil), ppm, metricsDB, logger, kademlia.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kad.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer kad.Close()
+
+	pk, _ := beeCrypto.GenerateSecp256k1Key()
+	signer := beeCrypto.NewDefaultSigner(pk)
+	addOne(t, signer, kad, ab, p1)
+
+	waitPeers(t, kad, 1)
+	select {
+	case <-doneC:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ping")
+	}
+}
+
+func TestBootnodeProtectedNodes(t *testing.T) {
+	defer func(a, b, c, d int) {
+		*kademlia.BootnodeOverSaturationPeers = a
+		*kademlia.SaturationPeers = b
+		*kademlia.LowWaterMark = c
+		*kademlia.QuickSaturationPeers = d
+	}(*kademlia.BootnodeOverSaturationPeers, *kademlia.SaturationPeers, *kademlia.LowWaterMark, *kademlia.QuickSaturationPeers)
+	*kademlia.BootnodeOverSaturationPeers = 1
+	*kademlia.SaturationPeers = 1
+	*kademlia.LowWaterMark = 0
+	*kademlia.QuickSaturationPeers = 1
+
+	// create base and protected nodes addresses
+	base := test.RandomAddress()
+	protected := make([]swarm.Address, 6)
+	for i := 0; i < 6; i++ {
+		addr := test.RandomAddressAt(base, i)
+		protected[i] = addr
+	}
+
+	var (
+		conns                 int32 // how many connect calls were made to the p2p mock
+		_, kad, ab, _, signer = newTestKademliaWithAddr(t, base, &conns, nil, kademlia.Options{
+			BootnodeMode: true,
+			StaticNodes:  protected,
+		})
+	)
+
+	kad.SetRadius(swarm.MaxPO) // don't use radius for checks
+	// Add maximum accepted number of peers up until bin 5 without problems
+	for i := 0; i < 6; i++ {
+		for j := 0; j < *kademlia.OverSaturationPeers; j++ {
+			// if error is not nil as specified, connectOne goes fatal
+			connectOne(t, signer, kad, ab, protected[i], nil)
+		}
+		// see depth is limited to currently added peers proximity
+		kDepth(t, kad, i)
+	}
+
+	// see depth is 5
+	kDepth(t, kad, 5)
+
+	for k := 0; k < 5; k++ {
+		// further connections should succeed outside of depth
+		addr := test.RandomAddressAt(base, k)
+		// if error is not as specified, connectOne goes fatal
+		connectOne(t, signer, kad, ab, addr, nil)
+		// see depth is still as expected
+		kDepth(t, kad, 5)
+	}
+	// ensure protected node was not kicked out and we have more than oversaturation
+	// amount
+	sizes := binSizes(kad)
+	for k := 0; k < 5; k++ {
+		if sizes[k] != 2 {
+			t.Fatalf("invalid bin size expected 2 found %d", sizes[k])
+		}
+	}
+	for k := 0; k < 5; k++ {
+		// further connections should succeed outside of depth
+		for l := 0; l < 3; l++ {
+			addr := test.RandomAddressAt(base, k)
+			// if error is not as specified, connectOne goes fatal
+			connectOne(t, signer, kad, ab, addr, nil)
+		}
+		// see depth is still as expected
+		kDepth(t, kad, 5)
+	}
+	// ensure unprotected nodes are kicked out to make room for new peers and protected
+	// nodes are still present
+	sizes = binSizes(kad)
+	for k := 0; k < 5; k++ {
+		if sizes[k] != 2 {
+			t.Fatalf("invalid bin size expected 2 found %d", sizes[k])
+		}
+	}
+	for _, pn := range protected {
+		found := false
+		_ = kad.EachPeer(func(addr swarm.Address, _ uint8) (bool, bool, error) {
+			if addr.Equal(pn) {
+				found = true
+				return true, false, nil
+			}
+			return false, false, nil
+		})
+		if !found {
+			t.Fatalf("protected node %s not found in connected list", pn)
+		}
+	}
+}
+
+func mineBin(t *testing.T, base swarm.Address, bin, count int, isBalanced bool) []swarm.Address {
+
+	var rndAddrs = make([]swarm.Address, count)
+
+	if count < 8 && isBalanced {
+		t.Fatal("peersCount must be greater than 8 for balanced bins")
+	}
+
+	for i := 0; i < count; i++ {
+		rndAddrs[i] = test.RandomAddressAt(base, bin)
+	}
+
+	if isBalanced {
+		prefixes := kademlia.GenerateCommonBinPrefixes(base, 3)
+		for i := 0; i < 8; i++ {
+			rndAddrs[i] = prefixes[bin][i]
+		}
+	} else {
+		for i := range rndAddrs {
+			bytes := rndAddrs[i].Bytes()
+			setBits(bytes, bin+1, 3, 0) // set 3 bits to '000' to mess with balance
+			rndAddrs[i] = swarm.NewAddress(bytes)
+		}
+	}
+
+	return rndAddrs
+}
+
+func setBits(data []byte, startBit, bitCount int, b int) {
+
+	index := startBit / 8
+	bitPos := startBit % 8
+
+	for bitCount > 0 {
+
+		bitValue := b >> (bitCount - 1)
+
+		if bitValue == 1 {
+			data[index] = data[index] | (1 << (7 - bitPos)) // set bit to 1
+		} else {
+			data[index] = data[index] & (^(1 << (7 - bitPos))) // set bit to 0
+		}
+
+		bitCount--
+		bitPos++
+
+		if bitPos == 8 {
+			bitPos = 0
+			index++
+		}
+	}
+}
+
+func binSizes(kad *kademlia.Kad) []int {
+	bins := make([]int, swarm.MaxBins)
+
+	_ = kad.EachPeer(func(a swarm.Address, u uint8) (stop bool, jumpToNext bool, err error) {
+		bins[u]++
+		return false, false, nil
+	})
+
+	return bins
+}
+
+func newTestKademliaWithAddr(t *testing.T, base swarm.Address, connCounter, failedConnCounter *int32, kadOpts kademlia.Options) (swarm.Address, *kademlia.Kad, addressbook.Interface, *mock.Discovery, beeCrypto.Signer) {
+>>>>>>> 1983c814 ( feat(kademlia): static nodes (#2512))
 	t.Helper()
 
 	metricsDB, err := shed.NewDB("", nil)
@@ -1187,6 +1496,7 @@ func newTestKademlia(t *testing.T, connCounter, failedConnCounter *int32, kadOpt
 		}
 	})
 	var (
+<<<<<<< HEAD
 		pk, _  = beeCrypto.GenerateSecp256k1Key()                              // random private key
 		signer = beeCrypto.NewDefaultSigner(pk)                                // signer
 		base   = test.RandomAddress()                                          // base address
@@ -1195,9 +1505,27 @@ func newTestKademlia(t *testing.T, connCounter, failedConnCounter *int32, kadOpt
 		logger = logging.New(ioutil.Discard, 0)                                // logger
 		disc   = mock.NewDiscovery()                                           // mock discovery protocol
 		kad    = kademlia.New(base, ab, disc, p2p, metricsDB, logger, kadOpts) // kademlia instance
+=======
+		pk, _  = beeCrypto.GenerateSecp256k1Key()                    // random private key
+		signer = beeCrypto.NewDefaultSigner(pk)                      // signer
+		ab     = addressbook.New(mockstate.NewStateStore())          // address book
+		p2p    = p2pMock(ab, signer, connCounter, failedConnCounter) // p2p mock
+		logger = logging.New(ioutil.Discard, 0)                      // logger
+		disc   = mock.NewDiscovery()                                 // mock discovery protocol
+		ppm    = pingpongmock.New(func(_ context.Context, _ swarm.Address, _ ...string) (time.Duration, error) {
+			return 0, nil
+		})
+>>>>>>> 1983c814 ( feat(kademlia): static nodes (#2512))
 	)
 
 	return base, kad, ab, disc, signer
+}
+
+func newTestKademlia(t *testing.T, connCounter, failedConnCounter *int32, kadOpts kademlia.Options) (swarm.Address, *kademlia.Kad, addressbook.Interface, *mock.Discovery, beeCrypto.Signer) {
+
+	t.Helper()
+	base := test.RandomAddress()
+	return newTestKademliaWithAddr(t, base, connCounter, failedConnCounter, kadOpts)
 }
 
 func p2pMock(ab addressbook.Interface, signer beeCrypto.Signer, counter, failedCounter *int32) p2p.Service {

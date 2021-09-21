@@ -10,4 +10,5 @@ var (
 	SaturationPeers             = &saturationPeers
 	OverSaturationPeers         = &overSaturationPeers
 	BootnodeOverSaturationPeers = &bootNodeOverSaturationPeers
+	LowWaterMark                = &nnLowWatermark
 )

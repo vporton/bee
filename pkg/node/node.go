@@ -154,6 +154,7 @@ type Options struct {
 	DeployGasPrice             string
 	WarmupTime                 time.Duration
 	ChainID                    int64
+	StaticNodes                []swarm.Address
 }
 
 const (
@@ -500,7 +501,11 @@ func NewBee(addr string, publicKey *ecdsa.PublicKey, signer crypto.Signer, netwo
 		return nil, fmt.Errorf("unable to create metrics storage for kademlia: %w", err)
 	}
 
-	kad := kademlia.New(swarmAddress, addressbook, hive, p2ps, metricsDB, logger, kademlia.Options{Bootnodes: bootnodes, BootnodeMode: o.BootnodeMode})
+	kad := kademlia.New(swarmAddress, addressbook, hive, p2ps, metricsDB, logger,
+		kademlia.Options{Bootnodes: bootnodes, BootnodeMode: o.BootnodeMode, StaticNodes: o.StaticNodes})
+	if err != nil {
+		return nil, fmt.Errorf("unable to create kademlia: %w", err)
+	}
 	b.topologyCloser = kad
 	b.topologyHalter = kad
 	hive.SetAddPeersHandler(kad.AddPeers)

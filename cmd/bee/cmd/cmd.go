@@ -72,6 +72,7 @@ const (
 	optionNameMainNet                    = "mainnet"
 	optionNameRetrievalCaching           = "cache-retrieval"
 	optionNameDevReserveCapacity         = "dev-reserve-capacity"
+	optionNameStaticNodes                = "static-nodes"
 )
 
 func init() {
@@ -254,6 +255,7 @@ func (c *command) setAllFlags(cmd *cobra.Command) {
 	cmd.Flags().Duration(optionWarmUpTime, time.Minute*20, "time to warmup the node before pull/push protocols can be kicked off.")
 	cmd.Flags().Bool(optionNameMainNet, false, "triggers connect to main net bootnodes.")
 	cmd.Flags().Bool(optionNameRetrievalCaching, true, "enable forwarded content caching")
+	cmd.Flags().StringSlice(optionNameStaticNodes, []string{}, "protect nodes from getting kicked out on bootnode")
 }
 
 func newLogger(cmd *cobra.Command, verbosity string) (logging.Logger, error) {

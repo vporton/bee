@@ -9,6 +9,7 @@ import (
 	random "crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"math/bits"
@@ -29,7 +30,6 @@ import (
 )
 
 const (
-	nnLowWatermark         = 2 // the number of peers in consecutive deepest bins that constitute as nearest neighbours
 	maxConnAttempts        = 1 // when there is maxConnAttempts failed connect calls for a given peer it is considered non-connectable
 	maxBootNodeAttempts    = 3 // how many attempts to dial to boot-nodes before giving up
 	defaultBitSuffixLength = 3 // the number of bits used to create pseudo addresses for balancing
@@ -40,6 +40,7 @@ const (
 )
 
 var (
+	nnLowWatermark              = 2 // the number of peers in consecutive deepest bins that constitute as nearest neighbours
 	quickSaturationPeers        = 4
 	saturationPeers             = 8
 	overSaturationPeers         = 20
@@ -59,6 +60,7 @@ var (
 type (
 	binSaturationFunc  func(bin uint8, peers, connected *pslice.PSlice) (saturated bool, oversaturated bool)
 	sanctionedPeerFunc func(peer swarm.Address) bool
+	staticPeerFunc     func(peer swarm.Address) bool
 )
 
 var noopSanctionedPeerFn = func(_ swarm.Address) bool { return false }
@@ -69,6 +71,7 @@ type Options struct {
 	Bootnodes       []ma.Multiaddr
 	BootnodeMode    bool
 	BitSuffixLength int
+	StaticNodes     []swarm.Address
 }
 
 // Kad is the Swarm forwarding kademlia implementation.
@@ -98,6 +101,7 @@ type Kad struct {
 	wg                sync.WaitGroup
 	waitNext          *waitnext.WaitNext
 	metrics           metrics
+	staticPeer        staticPeerFunc
 }
 
 // New returns a new Kademlia.
@@ -115,7 +119,7 @@ func New(
 		if o.BootnodeMode {
 			os = bootNodeOverSaturationPeers
 		}
-		o.SaturationFunc = binSaturated(os)
+		o.SaturationFunc = binSaturated(os, isStaticPeer(o.StaticNodes))
 	}
 	if o.BitSuffixLength == 0 {
 		o.BitSuffixLength = defaultBitSuffixLength
@@ -142,6 +146,7 @@ func New(
 		done:              make(chan struct{}),
 		wg:                sync.WaitGroup{},
 		metrics:           newMetrics(),
+		staticPeer:        isStaticPeer(o.StaticNodes),
 	}
 
 	if k.bitSuffixLength > 0 {
@@ -675,7 +680,7 @@ func (k *Kad) connectBootNodes(ctx context.Context) {
 // binSaturated indicates whether a certain bin is saturated or not.
 // when a bin is not saturated it means we would like to proactively
 // initiate connections to other peers in the bin.
-func binSaturated(oversaturationAmount int) binSaturationFunc {
+func binSaturated(oversaturationAmount int, staticNode staticPeerFunc) binSaturationFunc {
 	return func(bin uint8, peers, connected *pslice.PSlice) (bool, bool) {
 		potentialDepth := recalcDepth(peers, swarm.MaxPO)
 
@@ -692,8 +697,8 @@ func binSaturated(oversaturationAmount int) binSaturationFunc {
 		// gaps measurement)
 
 		size := 0
-		_ = connected.EachBin(func(_ swarm.Address, po uint8) (bool, bool, error) {
-			if po == bin {
+		_ = connected.EachBin(func(addr swarm.Address, po uint8) (bool, bool, error) {
+			if po == bin && !staticNode(addr) {
 				size++
 			}
 			return false, false, nil
@@ -742,7 +747,7 @@ func recalcDepth(peers *pslice.PSlice, radius uint8) uint8 {
 
 	_ = peers.EachBin(func(_ swarm.Address, po uint8) (bool, bool, error) {
 		peersCtr++
-		if peersCtr >= nnLowWatermark {
+		if peersCtr >= uint(nnLowWatermark) {
 			candidate = po
 			return true, false, nil
 		}
@@ -900,6 +905,18 @@ func (k *Kad) Pick(peer p2p.Peer) bool {
 	return false
 }
 
+func isStaticPeer(staticNodes []swarm.Address) func(overlay swarm.Address) bool {
+	return func(overlay swarm.Address) bool {
+		for _, addr := range staticNodes {
+			if addr.Equal(overlay) {
+				return true
+			}
+		}
+		return false
+
+	}
+}
+
 // Connected is called when a peer has dialed in.
 // If forceConnection is true `overSaturated` is ignored for non-bootnodes.
 func (k *Kad) Connected(ctx context.Context, peer p2p.Peer, forceConnection bool) error {
@@ -910,7 +927,7 @@ func (k *Kad) Connected(ctx context.Context, peer p2p.Peer, forceConnection bool
 		if k.bootnode {
 			randPeer, err := k.randomPeer(po)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to get random peer to kick-out: %w", err)
 			}
 			_ = k.p2p.Disconnect(randPeer, "kicking out random peer to accommodate node")
 			return k.connected(ctx, address)
@@ -1366,6 +1383,15 @@ func randomSubset(addrs []swarm.Address, count int) ([]swarm.Address, error) {
 
 func (k *Kad) randomPeer(bin uint8) (swarm.Address, error) {
 	peers := k.connectedPeers.BinPeers(bin)
+
+	for idx := 0; idx < len(peers); {
+		// do not consider protected peers
+		if k.staticPeer(peers[idx]) {
+			peers = append(peers[:idx], peers[idx+1:]...)
+			continue
+		}
+		idx++
+	}
 
 	if len(peers) == 0 {
 		return swarm.ZeroAddress, errEmptyBin
