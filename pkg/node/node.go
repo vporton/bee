@@ -95,6 +95,7 @@ type Bee struct {
 	tagsCloser               io.Closer
 	stateStoreCloser         io.Closer
 	localstoreCloser         io.Closer
+	nsCloser                 io.Closer
 	topologyCloser           io.Closer
 	topologyHalter           topology.Halter
 	pusherCloser             io.Closer
@@ -656,6 +657,7 @@ func NewBee(addr string, publicKey *ecdsa.PublicKey, signer crypto.Signer, netwo
 	} else {
 		ns = netstore.New(storer, validStamp, nil, retrieve, logger)
 	}
+	b.nsCloser = ns
 
 	traversalService := traversal.New(ns)
 
@@ -950,6 +952,7 @@ func (b *Bee) Shutdown(ctx context.Context) error {
 	tryClose(b.tracerCloser, "tracer")
 	tryClose(b.tagsCloser, "tag persistence")
 	tryClose(b.topologyCloser, "topology driver")
+	tryClose(b.nsCloser, "netstore")
 	tryClose(b.stateStoreCloser, "statestore")
 	tryClose(b.localstoreCloser, "localstore")
 	tryClose(b.errorLogWriter, "error log writer")
