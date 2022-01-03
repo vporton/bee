@@ -174,6 +174,7 @@ func (s *Service) Handshake(ctx context.Context, stream p2p.Stream, peerMultiadd
 	if err != nil {
 		return nil, err
 	}
+	s.logger.Debugf("advertisable underlay address %s", advertisableUnderlay)
 
 	bzzAddress, err := bzz.NewAddress(s.signer, advertisableUnderlay, s.overlay, s.networkID, s.transaction)
 	if err != nil {
@@ -268,6 +269,7 @@ func (s *Service) Handle(ctx context.Context, stream p2p.Stream, remoteMultiaddr
 	if err != nil {
 		return nil, err
 	}
+	s.logger.Debugf("advertisable underlay address %s", advertisableUnderlay)
 
 	bzzAddress, err := bzz.NewAddress(s.signer, advertisableUnderlay, s.overlay, s.networkID, s.transaction)
 	if err != nil {

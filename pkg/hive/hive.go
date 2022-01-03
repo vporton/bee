@@ -199,6 +199,8 @@ func (s *Service) sendPeers(ctx context.Context, peer swarm.Address, peers []swa
 			continue // Don't advertise private CIDRs to the public network.
 		}
 
+		s.logger.Debugf("Broadcasting underlay %s", addr.Underlay)
+
 		peersRequest.Peers = append(peersRequest.Peers, &pb.BzzAddress{
 			Overlay:     addr.Overlay.Bytes(),
 			Underlay:    addr.Underlay.Bytes(),
