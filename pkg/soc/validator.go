@@ -5,6 +5,8 @@
 package soc
 
 import (
+	"errors"
+
 	"github.com/ethersphere/bee/pkg/swarm"
 )
 
@@ -20,4 +22,22 @@ func Valid(ch swarm.Chunk) bool {
 		return false
 	}
 	return ch.Address().Equal(address)
+}
+
+func ValidE(ch swarm.Chunk) error {
+	s, err := FromChunk(ch)
+	if err != nil {
+		return err
+	}
+
+	address, err := s.address()
+	if err != nil {
+		return err
+	}
+
+	if !ch.Address().Equal(address) {
+		return errors.New("address mismatch")
+	}
+
+	return nil
 }

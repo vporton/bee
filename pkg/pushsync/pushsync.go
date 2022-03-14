@@ -173,7 +173,8 @@ func (ps *PushSync) handler(ctx context.Context, p p2p.Peer, stream p2p.Stream) 
 		if ps.unwrap != nil {
 			go ps.unwrap(chunk)
 		}
-	} else if !soc.Valid(chunk) {
+	} else if e := soc.ValidE(chunk); e != nil {
+		ps.logger.Errorf("invalid SOC %v", e)
 		return swarm.ErrInvalidChunk
 	}
 
