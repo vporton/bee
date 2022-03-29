@@ -60,6 +60,7 @@ func (s *store) Get(ctx context.Context, mode storage.ModeGet, addr swarm.Addres
 	ch, err = s.Storer.Get(ctx, mode, addr)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
+			s.logger.Debugf("requesting chunk for address %s from network", addr)
 			// request from network
 			ch, err = s.retrieval.RetrieveChunk(ctx, addr, true)
 			if err != nil {
@@ -76,6 +77,7 @@ func (s *store) Get(ctx context.Context, mode storage.ModeGet, addr swarm.Addres
 		}
 		return nil, fmt.Errorf("netstore get: %w", err)
 	}
+	s.logger.Debugf("chunk for address %s found locally", addr)
 	return ch, nil
 }
 

@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethersphere/bee/pkg/encryption/store"
 	"github.com/ethersphere/bee/pkg/file"
@@ -26,10 +28,14 @@ type joiner struct {
 	span      int64
 	off       int64
 	refLength int
-	getLock   sync.Mutex
 
 	ctx    context.Context
 	getter storage.Getter
+
+	copyDuration int64
+	copyCount    int64
+	getDuration  int64
+	getCount     int64
 }
 
 // New creates a new Joiner. A Joiner provides Read, Seek and Size functionalities.
@@ -64,7 +70,10 @@ func (j *joiner) Read(b []byte) (n int, err error) {
 	if err != nil && err != io.EOF {
 		return read, err
 	}
-
+	fmt.Printf("average data copy duration: %v\n", time.Duration(j.copyDuration/j.copyCount))
+	fmt.Printf("total data copy duration: %v\n", time.Duration(j.copyDuration))
+	fmt.Printf("average data get duration: %v\n", time.Duration(j.getDuration/j.getCount))
+	fmt.Printf("total data get duration: %v\n", time.Duration(j.getDuration))
 	j.off += int64(read)
 	return read, err
 }
@@ -87,17 +96,17 @@ func (j *joiner) ReadAt(buffer []byte, off int64) (read int, err error) {
 	if err != nil {
 		return 0, err
 	}
-
 	return int(atomic.LoadInt64(&bytesRead)), nil
 }
 
 var ErrMalformedTrie = errors.New("malformed tree")
 
 func (j *joiner) readAtOffset(b, buf []byte, cur, subTrieSize, off, bufferOffset, bytesToRead int64, bytesRead *int64, eg *errgroup.Group) {
-	j.getLock.Lock()
+	start := time.Now()
 	data := make([]byte, len(buf))
 	copy(data, buf)
-	j.getLock.Unlock()
+	atomic.AddInt64(&j.copyDuration, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&j.copyCount, 1)
 
 	// we are at a leaf data chunk
 	if subTrieSize <= int64(len(data)) {
@@ -109,9 +118,7 @@ func (j *joiner) readAtOffset(b, buf []byte, cur, subTrieSize, off, bufferOffset
 		}
 
 		bs := data[dataOffsetStart:dataOffsetEnd]
-		//j.getLock.Lock()
 		n := copy(b[bufferOffset:bufferOffset+int64(len(bs))], bs)
-		//j.getLock.Unlock()
 		atomic.AddInt64(bytesRead, int64(n))
 		return
 	}
@@ -146,10 +153,13 @@ func (j *joiner) readAtOffset(b, buf []byte, cur, subTrieSize, off, bufferOffset
 
 		func(address swarm.Address, b []byte, cur, subTrieSize, off, bufferOffset, bytesToRead, subtrieSpanLimit int64) {
 			eg.Go(func() error {
+				start := time.Now()
 				ch, err := j.getter.Get(j.ctx, storage.ModeGetRequest, address)
 				if err != nil {
 					return err
 				}
+				atomic.AddInt64(&j.getDuration, time.Since(start).Nanoseconds())
+				atomic.AddInt64(&j.getCount, 1)
 
 				chunkData := ch.Data()[8:]
 				subtrieSpan := int64(chunkToSpan(ch.Data()))
