@@ -26,6 +26,7 @@ type joiner struct {
 	span      int64
 	off       int64
 	refLength int
+	getLock   sync.Mutex
 
 	ctx    context.Context
 	getter storage.Getter
@@ -92,7 +93,12 @@ func (j *joiner) ReadAt(buffer []byte, off int64) (read int, err error) {
 
 var ErrMalformedTrie = errors.New("malformed tree")
 
-func (j *joiner) readAtOffset(b, data []byte, cur, subTrieSize, off, bufferOffset, bytesToRead int64, bytesRead *int64, eg *errgroup.Group) {
+func (j *joiner) readAtOffset(b, buf []byte, cur, subTrieSize, off, bufferOffset, bytesToRead int64, bytesRead *int64, eg *errgroup.Group) {
+	j.getLock.Lock()
+	data := make([]byte, len(buf))
+	copy(data, buf)
+	j.getLock.Unlock()
+
 	// we are at a leaf data chunk
 	if subTrieSize <= int64(len(data)) {
 		dataOffsetStart := off - cur
@@ -103,7 +109,9 @@ func (j *joiner) readAtOffset(b, data []byte, cur, subTrieSize, off, bufferOffse
 		}
 
 		bs := data[dataOffsetStart:dataOffsetEnd]
+		//j.getLock.Lock()
 		n := copy(b[bufferOffset:bufferOffset+int64(len(bs))], bs)
+		//j.getLock.Unlock()
 		atomic.AddInt64(bytesRead, int64(n))
 		return
 	}
