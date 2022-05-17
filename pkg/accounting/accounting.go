@@ -91,19 +91,32 @@ type AtomicMutex struct {
 	// unlocked = 0 (default)
 	// locked = 1
 	locked uint32
+	c      chan struct{}
 }
 
-func (m *AtomicMutex) Lock() (out chan struct{}) {
+func NewMutex() AtomicMutex {
+	return AtomicMutex{
+		c: make(chan struct{}, 1),
+	}
+}
+
+func (m *AtomicMutex) Lock() chan struct{} {
 	if atomic.CompareAndSwapUint32(&m.locked, 0, 1) {
-		out = make(chan struct{}, 1)
-		out <- struct{}{}
+		select {
+		case m.c <- struct{}{}:
+		default:
+		}
 	}
 
-	return
+	return m.c
 }
 
 func (m *AtomicMutex) Unlock() {
 	atomic.StoreUint32(&m.locked, 0)
+	select {
+	case m.c <- struct{}{}:
+	default:
+	}
 }
 
 // accountingPeer holds all in-memory accounting information for one peer.
@@ -550,7 +563,7 @@ func (a *Accounting) getAccountingPeer(peer swarm.Address) *accountingPeer {
 	peerData, ok := a.accountingPeers[peer.String()]
 	if !ok {
 		peerData = &accountingPeer{
-			lock:                  AtomicMutex{},
+			lock:                  NewMutex(),
 			reservedBalance:       big.NewInt(0),
 			shadowReservedBalance: big.NewInt(0),
 			ghostBalance:          big.NewInt(0),
@@ -932,8 +945,13 @@ func (a *Accounting) NotifyRefreshmentReceived(peer swarm.Address, amount *big.I
 func (a *Accounting) PrepareDebit(ctx context.Context, peer swarm.Address, price uint64) (Action, error) {
 	accountingPeer := a.getAccountingPeer(peer)
 
-	accountingPeer.lock.Lock()
-	defer accountingPeer.lock.Unlock()
+	select {
+	case <-accountingPeer.lock.Lock():
+		defer accountingPeer.lock.Unlock()
+		// continue
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	if !accountingPeer.connected {
 		return nil, errors.New("connection not initialized yet")
