@@ -135,7 +135,7 @@ func (s *Service) PrepareCredit(_ context.Context, peer swarm.Address, price uin
 	return s.MakeCreditAction(peer, price), nil
 }
 
-func (a *debitAction) Apply() error {
+func (a *debitAction) Apply(_ context.Context) error {
 	a.accounting.lock.Lock()
 	defer a.accounting.lock.Unlock()
 
@@ -148,9 +148,9 @@ func (a *debitAction) Apply() error {
 	return nil
 }
 
-func (a *creditAction) Cleanup() {}
+func (a *creditAction) Cleanup(_ context.Context) {}
 
-func (a *creditAction) Apply() error {
+func (a *creditAction) Apply(_ context.Context) error {
 	a.accounting.lock.Lock()
 	defer a.accounting.lock.Unlock()
 
@@ -163,7 +163,7 @@ func (a *creditAction) Apply() error {
 	return nil
 }
 
-func (a *debitAction) Cleanup() {}
+func (a *debitAction) Cleanup(_ context.Context) {}
 
 // Balance is the mock function wrapper that calls the set implementation
 func (s *Service) Balance(peer swarm.Address) (*big.Int, error) {

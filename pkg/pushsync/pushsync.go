@@ -221,7 +221,7 @@ func (ps *PushSync) handler(ctx context.Context, p p2p.Peer, stream p2p.Stream) 
 			if err != nil {
 				return fmt.Errorf("prepare debit to peer %s before writeback: %w", p.Address.String(), err)
 			}
-			defer debit.Cleanup()
+			defer debit.Cleanup(context.Background())
 
 			// return back receipt
 			signature, err := ps.signer.Sign(chunkAddress.Bytes())
@@ -235,7 +235,7 @@ func (ps *PushSync) handler(ctx context.Context, p p2p.Peer, stream p2p.Stream) 
 				return fmt.Errorf("send receipt to peer %s: %w", p.Address.String(), err)
 			}
 
-			err = debit.Apply()
+			err = debit.Apply(context.Background())
 			return err
 		}
 	}
@@ -281,14 +281,14 @@ func (ps *PushSync) handler(ctx context.Context, p p2p.Peer, stream p2p.Stream) 
 			if err != nil {
 				return fmt.Errorf("prepare debit to peer %s before writeback: %w", p.Address.String(), err)
 			}
-			defer debit.Cleanup()
+			defer debit.Cleanup(context.Background())
 
 			receipt := pb.Receipt{Address: chunkAddress.Bytes(), Signature: signature, BlockHash: ps.blockHash}
 			if err := w.WriteMsgWithContext(ctx, &receipt); err != nil {
 				return fmt.Errorf("send receipt to peer %s: %w", p.Address.String(), err)
 			}
 
-			return debit.Apply()
+			return debit.Apply(context.Background())
 		}
 
 		ps.metrics.Forwarder.Inc()
@@ -302,14 +302,14 @@ func (ps *PushSync) handler(ctx context.Context, p p2p.Peer, stream p2p.Stream) 
 	if err != nil {
 		return fmt.Errorf("prepare debit to peer %s before writeback: %w", p.Address.String(), err)
 	}
-	defer debit.Cleanup()
+	defer debit.Cleanup(context.Background())
 
 	// pass back the receipt
 	if err := w.WriteMsgWithContext(ctx, receipt); err != nil {
 		return fmt.Errorf("send receipt to peer %s: %w", p.Address.String(), err)
 	}
 
-	return debit.Apply()
+	return debit.Apply(context.Background())
 }
 
 // PushChunkToClosest sends chunk to the closest peer by opening a stream. It then waits for
@@ -489,7 +489,7 @@ func (ps *PushSync) pushPeer(ctx context.Context, resultChan chan<- receiptResul
 		err = fmt.Errorf("reserve balance for peer %s: %w", peer, err)
 		return
 	}
-	defer creditAction.Cleanup()
+	defer creditAction.Cleanup(context.Background())
 
 	stamp, err := ch.Stamp().MarshalBinary()
 	if err != nil {
@@ -542,7 +542,7 @@ func (ps *PushSync) pushPeer(ctx context.Context, resultChan chan<- receiptResul
 		return
 	}
 
-	err = creditAction.Apply()
+	err = creditAction.Apply(context.Background())
 }
 
 func (ps *PushSync) pushToNeighbourhood(ctx context.Context, skiplist []swarm.Address, ch swarm.Chunk, origin bool, originAddr swarm.Address) {
@@ -608,7 +608,7 @@ func (ps *PushSync) pushToNeighbour(ctx context.Context, peer swarm.Address, ch 
 		err = fmt.Errorf("reserve balance for peer %s: %w", peer.String(), err)
 		return
 	}
-	defer creditAction.Cleanup()
+	defer creditAction.Cleanup(context.Background())
 
 	streamer, err := ps.streamer.NewStream(ctx, peer, nil, protocolName, protocolVersion, streamName)
 	if err != nil {
@@ -648,7 +648,7 @@ func (ps *PushSync) pushToNeighbour(ctx context.Context, peer swarm.Address, ch 
 		return
 	}
 
-	if err = creditAction.Apply(); err != nil {
+	if err = creditAction.Apply(context.Background()); err != nil {
 		return
 	}
 }
