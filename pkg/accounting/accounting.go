@@ -222,8 +222,12 @@ func (a *Accounting) getIncreasedExpectedDebt(peer swarm.Address, accountingPeer
 func (a *Accounting) PrepareCredit(ctx context.Context, peer swarm.Address, price uint64, originated bool) (Action, error) {
 	accountingPeer := a.getAccountingPeer(peer)
 
-	<-accountingPeer.lock.Lock()
-	defer accountingPeer.lock.Unlock()
+	select {
+	case <-accountingPeer.lock.Lock():
+		defer accountingPeer.lock.Unlock()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	if !accountingPeer.connected {
 		return nil, errors.New("connection not initialized yet")
@@ -930,8 +934,12 @@ func (a *Accounting) NotifyRefreshmentReceived(peer swarm.Address, amount *big.I
 func (a *Accounting) PrepareDebit(ctx context.Context, peer swarm.Address, price uint64) (Action, error) {
 	accountingPeer := a.getAccountingPeer(peer)
 
-	<-accountingPeer.lock.Lock()
-	defer accountingPeer.lock.Unlock()
+	select {
+	case <-accountingPeer.lock.Lock():
+		defer accountingPeer.lock.Unlock()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	if !accountingPeer.connected {
 		return nil, errors.New("connection not initialized yet")
