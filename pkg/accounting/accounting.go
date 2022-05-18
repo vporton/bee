@@ -257,7 +257,7 @@ func (a *Accounting) PrepareCredit(ctx context.Context, peer swarm.Address, pric
 	// we pay early to avoid needlessly blocking request later when concurrent requests occur and we are already close to the payment threshold.
 
 	if increasedExpectedDebtReduced.Cmp(threshold) >= 0 && currentBalance.Cmp(big.NewInt(0)) < 0 {
-		err = a.settle(peer, accountingPeer)
+		err = a.settle(ctx, peer, accountingPeer)
 		if err != nil {
 			return nil, fmt.Errorf("failed to settle with peer %v: %w", peer, err)
 		}
@@ -376,7 +376,7 @@ func (c *creditAction) Cleanup(ctx context.Context) {
 
 // Settle all debt with a peer. The lock on the accountingPeer must be held when
 // called.
-func (a *Accounting) settle(peer swarm.Address, balance *accountingPeer) error {
+func (a *Accounting) settle(ctx context.Context, peer swarm.Address, balance *accountingPeer) error {
 	now := a.timeNow().Unix()
 	timeElapsed := now - balance.refreshTimestamp
 
@@ -402,7 +402,7 @@ func (a *Accounting) settle(peer swarm.Address, balance *accountingPeer) error {
 			return err
 		}
 
-		acceptedAmount, timestamp, err := a.refreshFunction(context.Background(), peer, paymentAmount, shadowBalance)
+		acceptedAmount, timestamp, err := a.refreshFunction(ctx, peer, paymentAmount, shadowBalance)
 		if err != nil {
 			// if we get settlement too soon it comes from a peer timestamp being ahead of ours, blocking refreshment
 			// if we get err peer not found the peer is already disconnected / blocklisted
