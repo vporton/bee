@@ -26,6 +26,7 @@ import (
 	"github.com/ethersphere/bee/pkg/keystore"
 	filekeystore "github.com/ethersphere/bee/pkg/keystore/file"
 	memkeystore "github.com/ethersphere/bee/pkg/keystore/mem"
+	"github.com/ethersphere/bee/pkg/log"
 	"github.com/ethersphere/bee/pkg/logging"
 	"github.com/ethersphere/bee/pkg/node"
 	"github.com/ethersphere/bee/pkg/resolver/multiresolver"
@@ -42,6 +43,13 @@ const (
 var beeWelcomeMessage string
 
 func (c *command) initStartCmd() (err error) {
+
+	logger := log.NewLogger("test")
+	logger.Info("IT WORKS!")
+	logger.V(1).Info("IT WORKS!")
+	logger.V(2).Info("IT WORKS!")
+	logger.V(3).Info("IT WORKS!")
+	//return nil
 
 	cmd := &cobra.Command{
 		Use:   "start",
