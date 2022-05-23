@@ -4,7 +4,16 @@
 
 package log
 
-import "github.com/go-logr/logr"
+import (
+	"github.com/ethersphere/bee/pkg/log/internal"
+	"github.com/go-logr/logr"
+)
+
+// Marshaler is an optional interface that logged values may choose to
+// implement. Loggers with structured output, such as JSON, should
+// log the object return by the MarshalLog method instead of the
+// original value.
+type Marshaler = internal.Marshaler
 
 // Logger provides the basic logger functionality.
 type Logger struct {
@@ -99,5 +108,5 @@ func (l Logger) WithCallDepth(depth int) Logger {
 // returned.
 func (l Logger) WithCallStackHelper() (func(), Logger) {
 	fn, lgr := l.logger.WithCallStackHelper()
-	return fn, Logger{logger:lgr}
+	return fn, Logger{logger: lgr}
 }
