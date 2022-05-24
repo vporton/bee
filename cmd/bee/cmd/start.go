@@ -51,7 +51,10 @@ func (c *command) initStartCmd() (err error) {
 	l.V(1).Debug("IT WORKS!", "value", 2)
 	logger.Info("IT WORKS!", "value", 2)
 	logger.Error(nil, "IT WORKS!", "value", 3)
-	logger.WithName("test_name").WithName("test_name").Info("IT WORKS!")
+	l = logger.WithName("test_name")
+	l.Info("IT WORKS!")
+	logger.WithName("test_name_2").Info("IT WORKS!")
+	l.WithName("test_name_2").Info("IT WORKS!")
 	return nil
 
 	cmd := &cobra.Command{

@@ -24,13 +24,18 @@ type Logger struct {
 	sink      io.Writer
 }
 
+func (l *Logger) clone() *Logger {
+	c := *l
+	return &c
+}
+
 // Enabled tests whether this Logger is enabled.  For example, commandline
 // flags might be used to set the logging verbosity and disable some info logs.
-func (l Logger) Enabled() bool {
+func (l *Logger) Enabled() bool {
 	return true // TODO
 }
 
-func (l Logger) Debug(msg string, keysAndValues ...interface{}) {
+func (l *Logger) Debug(msg string, keysAndValues ...interface{}) {
 	buf := l.formatter.FormatDebug(l.verbosity, msg, keysAndValues)
 	if _, err := l.sink.Write(buf); err != nil {
 		fmt.Printf("log.Debug: unable to write buffer: %s\n", buf)
@@ -43,7 +48,7 @@ func (l Logger) Debug(msg string, keysAndValues ...interface{}) {
 // line.  The key/value pairs can then be used to add additional variable
 // information.  The key/value pairs must alternate string keys and arbitrary
 // values.
-func (l Logger) Info(msg string, keysAndValues ...interface{}) {
+func (l *Logger) Info(msg string, keysAndValues ...interface{}) {
 	buf := l.formatter.FormatInfo(msg, keysAndValues)
 	if _, err := l.sink.Write(buf); err != nil {
 		fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
@@ -60,7 +65,7 @@ func (l Logger) Info(msg string, keysAndValues ...interface{}) {
 // while the err argument should be used to attach the actual error that
 // triggered this log line, if present. The err parameter is optional
 // and nil may be passed instead of an error instance.
-func (l Logger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (l *Logger) Error(err error, msg string, keysAndValues ...interface{}) {
 	buf := l.formatter.FormatError(err, msg, keysAndValues)
 	if _, err := l.sink.Write(buf); err != nil {
 		fmt.Printf("log.Error: unable to write buffer: %s\n", buf)
@@ -71,19 +76,18 @@ func (l Logger) Error(err error, msg string, keysAndValues ...interface{}) {
 // this Logger.  In other words, V-levels are additive.  A higher verbosity
 // level means a log message is less important.  Negative V-levels are treated
 // as 0.
-func (l Logger) V(verbosity int) Logger {
-	return Logger{
-		verbosity: l.verbosity + verbosity,
-		sink:      l.sink,
-		formatter: l.formatter,
-	}
+func (l *Logger) V(verbosity int) *Logger {
+	c := l.clone()
+	c.verbosity += verbosity
+	return c
 }
 
 // WithValues returns a new Logger instance with additional key/value pairs.
 // See Info for documentation on how key/value pairs work.
-func (l Logger) WithValues(keysAndValues ...interface{}) Logger {
-	l.formatter.AddValues(keysAndValues) // TODO: new logger
-	return l
+func (l *Logger) WithValues(keysAndValues ...interface{}) *Logger {
+	c := l.clone()
+	c.formatter.AddValues(keysAndValues)
+	return c
 }
 
 // WithName returns a new Logger instance with the specified name element added
@@ -91,9 +95,10 @@ func (l Logger) WithValues(keysAndValues ...interface{}) Logger {
 // suffixes to the Logger's name.  It's strongly recommended that name segments
 // contain only letters, digits, and hyphens (see the package documentation for
 // more information).
-func (l Logger) WithName(name string) Logger {
-	l.formatter.AddName(name) // TODO: new logger
-	return l
+func (l *Logger) WithName(name string) *Logger {
+	c := l.clone()
+	c.formatter.AddName(name)
+	return c
 }
 
 // WithCallDepth returns a Logger instance that offsets the call stack by the
@@ -111,25 +116,8 @@ func (l Logger) WithName(name string) Logger {
 // To skip one level, WithCallStackHelper() should be used instead of
 // WithCallDepth(1) because it works with implementions that support the
 // CallDepthLogSink and/or CallStackHelperLogSink interfaces.
-func (l Logger) WithCallDepth(depth int) Logger {
-	l.formatter.AddCallDepth(depth) // TODO: new logger
-	return l
-}
-
-// WithCallStackHelper returns a new Logger instance that skips the direct
-// caller when logging call site information, if possible.  This is useful for
-// users who have helper functions between the "real" call site and the actual
-// calls to Logger methods and want to support loggers which depend on marking
-// each individual helper function, like loggers based on testing.T.
-//
-// In addition to using that new logger instance, callers also must call the
-// returned function.
-//
-// If the underlying log implementation supports a WithCallDepth(int) method,
-// WithCallDepth(1) will be called to produce a new logger. If it supports a
-// WithCallStackHelper() method, that will be also called. If the
-// implementation does not support either of these, the original Logger will be
-// returned.
-func (l Logger) WithCallStackHelper() (func(), Logger) {
-	return func() {}, l // TODO:!
+func (l *Logger) WithCallDepth(depth int) *Logger {
+	c := l.clone()
+	c.formatter.AddCallDepth(depth)
+	return c
 }

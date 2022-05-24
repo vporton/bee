@@ -47,7 +47,13 @@ func NewLogger(name string) *Logger {
 
 	logger = &Logger{
 		sink: os.Stderr,
-		formatter: internal.NewFormatter(internal.Options{LogCaller: internal.All}),
+		formatter: internal.NewFormatter(
+			internal.Options{
+				LogTimestamp: true,
+				LogCaller:    internal.All,
+				//LogCallerFunc: true,
+			},
+		),
 	}
 	registry.loggers[name] = logger
 	return logger

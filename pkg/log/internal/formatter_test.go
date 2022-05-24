@@ -15,8 +15,10 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -33,7 +35,7 @@ var _ logr.CallDepthLogSink = &fnlogger{}
 // and just needs to add some glue code.
 type fnlogger struct {
 	Formatter
-	write func(prefix, args string)
+	sink io.Writer
 }
 
 func (l fnlogger) Init(info logr.RuntimeInfo) {
@@ -56,23 +58,18 @@ func (l fnlogger) WithCallDepth(depth int) logr.LogSink {
 }
 
 func (l fnlogger) Info(level int, msg string, kvList ...interface{}) {
-	prefix, args := l.FormatInfo(level, msg, kvList)
-	l.write(prefix, args)
+	l.sink.Write(l.FormatInfo(msg, kvList))
 }
 
 func (l fnlogger) Error(err error, msg string, kvList ...interface{}) {
-	prefix, args := l.FormatError(err, msg, kvList)
-	l.write(prefix, args)
+	l.sink.Write(l.FormatError(err, msg, kvList))
 }
 
-func newSink(fn func(prefix, args string), formatter Formatter) logr.LogSink {
-	l := &fnlogger{
+func newSink(w io.Writer, formatter Formatter) logr.LogSink {
+	return &fnlogger{
 		Formatter: formatter,
-		write:     fn,
+		sink:      w,
 	}
-	// For skipping fnlogger.Info and fnlogger.Error.
-	l.Formatter.AddCallDepth(1)
-	return l
 }
 
 // Will be handled via reflection instead of type assertions.
@@ -702,12 +699,12 @@ func TestPretty(t *testing.T) {
 		} else {
 			jb, err := json.Marshal(tc.val)
 			if err != nil {
-				t.Fatalf("[%d]: unexpected error: %v\ngot: %q", i, err, ours)
+				t.Fatalf("[%d]: unexpected error: %v\nhave: %q", i, err, ours)
 			}
 			want = string(jb)
 		}
 		if ours != want {
-			t.Errorf("[%d]:\n\texpected %q\n\tgot      %q", i, want, ours)
+			t.Errorf("[%d]:\n\twant %q\n\thave%q", i, want, ours)
 		}
 	}
 }
@@ -718,58 +715,58 @@ func makeKV(args ...interface{}) []interface{} {
 
 func TestRender(t *testing.T) {
 	testCases := []struct {
-		name       string
-		builtins   []interface{}
-		values     []interface{}
-		args       []interface{}
-		expectKV   string
-		expectJSON string
+		name     string
+		builtins []interface{}
+		values   []interface{}
+		args     []interface{}
+		wantKV   string
+		wantJSON string
 	}{{
-		name:       "nil",
-		expectKV:   "",
-		expectJSON: "{}",
+		name:     "nil",
+		wantKV:   "",
+		wantJSON: "{}",
 	}, {
-		name:       "empty",
-		builtins:   []interface{}{},
-		values:     []interface{}{},
-		args:       []interface{}{},
-		expectKV:   "",
-		expectJSON: "{}",
+		name:     "empty",
+		builtins: []interface{}{},
+		values:   []interface{}{},
+		args:     []interface{}{},
+		wantKV:   "",
+		wantJSON: "{}",
 	}, {
-		name:       "primitives",
-		builtins:   makeKV("int1", 1, "int2", 2),
-		values:     makeKV("str1", "ABC", "str2", "DEF"),
-		args:       makeKV("bool1", true, "bool2", false),
-		expectKV:   `"int1"=1 "int2"=2 "str1"="ABC" "str2"="DEF" "bool1"=true "bool2"=false`,
-		expectJSON: `{"int1":1,"int2":2,"str1":"ABC","str2":"DEF","bool1":true,"bool2":false}`,
+		name:     "primitives",
+		builtins: makeKV("int1", 1, "int2", 2),
+		values:   makeKV("str1", "ABC", "str2", "DEF"),
+		args:     makeKV("bool1", true, "bool2", false),
+		wantKV:   `"int1"=1 "int2"=2 "str1"="ABC" "str2"="DEF" "bool1"=true "bool2"=false`,
+		wantJSON: `{"int1":1,"int2":2,"str1":"ABC","str2":"DEF","bool1":true,"bool2":false}`,
 	}, {
-		name:       "pseudo structs",
-		builtins:   makeKV("int", PseudoStruct(makeKV("intsub", 1))),
-		values:     makeKV("str", PseudoStruct(makeKV("strsub", "2"))),
-		args:       makeKV("bool", PseudoStruct(makeKV("boolsub", true))),
-		expectKV:   `"int"={"intsub":1} "str"={"strsub":"2"} "bool"={"boolsub":true}`,
-		expectJSON: `{"int":{"intsub":1},"str":{"strsub":"2"},"bool":{"boolsub":true}}`,
+		name:     "pseudo structs",
+		builtins: makeKV("int", PseudoStruct(makeKV("intsub", 1))),
+		values:   makeKV("str", PseudoStruct(makeKV("strsub", "2"))),
+		args:     makeKV("bool", PseudoStruct(makeKV("boolsub", true))),
+		wantKV:   `"int"={"intsub":1} "str"={"strsub":"2"} "bool"={"boolsub":true}`,
+		wantJSON: `{"int":{"intsub":1},"str":{"strsub":"2"},"bool":{"boolsub":true}}`,
 	}, {
-		name:       "escapes",
-		builtins:   makeKV("\"1\"", 1),     // will not be escaped, but should never happen
-		values:     makeKV("\tstr", "ABC"), // escaped
-		args:       makeKV("bool\n", true), // escaped
-		expectKV:   `""1""=1 "\tstr"="ABC" "bool\n"=true`,
-		expectJSON: `{""1"":1,"\tstr":"ABC","bool\n":true}`,
+		name:     "escapes",
+		builtins: makeKV("\"1\"", 1),     // will not be escaped, but should never happen
+		values:   makeKV("\tstr", "ABC"), // escaped
+		args:     makeKV("bool\n", true), // escaped
+		wantKV:   `""1""=1 "\tstr"="ABC" "bool\n"=true`,
+		wantJSON: `{""1"":1,"\tstr":"ABC","bool\n":true}`,
 	}, {
-		name:       "missing value",
-		builtins:   makeKV("builtin"),
-		values:     makeKV("value"),
-		args:       makeKV("arg"),
-		expectKV:   `"builtin"="<no-value>" "value"="<no-value>" "arg"="<no-value>"`,
-		expectJSON: `{"builtin":"<no-value>","value":"<no-value>","arg":"<no-value>"}`,
+		name:     "missing value",
+		builtins: makeKV("builtin"),
+		values:   makeKV("value"),
+		args:     makeKV("arg"),
+		wantKV:   `"builtin"="<no-value>" "value"="<no-value>" "arg"="<no-value>"`,
+		wantJSON: `{"builtin":"<no-value>","value":"<no-value>","arg":"<no-value>"}`,
 	}, {
-		name:       "non-string key int",
-		builtins:   makeKV(123, "val"), // should never happen
-		values:     makeKV(456, "val"),
-		args:       makeKV(789, "val"),
-		expectKV:   `"<non-string-key: 123>"="val" "<non-string-key: 456>"="val" "<non-string-key: 789>"="val"`,
-		expectJSON: `{"<non-string-key: 123>":"val","<non-string-key: 456>":"val","<non-string-key: 789>":"val"}`,
+		name:     "non-string key int",
+		builtins: makeKV(123, "val"), // should never happen
+		values:   makeKV(456, "val"),
+		args:     makeKV(789, "val"),
+		wantKV:   `"<non-string-key: 123>"="val" "<non-string-key: 456>"="val" "<non-string-key: 789>"="val"`,
+		wantJSON: `{"<non-string-key: 123>":"val","<non-string-key: 456>":"val","<non-string-key: 789>":"val"}`,
 	}, {
 		name: "non-string key struct",
 		builtins: makeKV(struct { // will not be escaped, but should never happen
@@ -784,24 +781,24 @@ func TestRender(t *testing.T) {
 			F1 string
 			F2 int
 		}{"arg", 789}, "val"),
-		expectKV:   `"<non-string-key: {"F1":"builtin",>"="val" "<non-string-key: {\"F1\":\"value\",\"F>"="val" "<non-string-key: {\"F1\":\"arg\",\"F2\">"="val"`,
-		expectJSON: `{"<non-string-key: {"F1":"builtin",>":"val","<non-string-key: {\"F1\":\"value\",\"F>":"val","<non-string-key: {\"F1\":\"arg\",\"F2\">":"val"}`,
+		wantKV:   `"<non-string-key: {"F1":"builtin",>"="val" "<non-string-key: {\"F1\":\"value\",\"F>"="val" "<non-string-key: {\"F1\":\"arg\",\"F2\">"="val"`,
+		wantJSON: `{"<non-string-key: {"F1":"builtin",>":"val","<non-string-key: {\"F1\":\"value\",\"F>":"val","<non-string-key: {\"F1\":\"arg\",\"F2\">":"val"}`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			test := func(t *testing.T, formatter Formatter, expect string) {
+			test := func(t *testing.T, formatter Formatter, want string) {
 				formatter.AddValues(tc.values)
-				r := formatter.render(tc.builtins, tc.args)
-				if r != expect {
-					t.Errorf("wrong output:\nexpected %v\n     got %v", expect, r)
+				have := string(bytes.TrimRight(formatter.render(tc.builtins, tc.args), "\n"))
+				if have != want {
+					t.Errorf("wrong output:\nwant %q\nhave %q", want, have)
 				}
 			}
 			t.Run("KV", func(t *testing.T) {
-				test(t, NewFormatter(Options{}), tc.expectKV)
+				test(t, NewFormatter(Options{}), tc.wantKV)
 			})
 			t.Run("JSON", func(t *testing.T) {
-				test(t, NewFormatterJSON(Options{}), tc.expectJSON)
+				test(t, NewFormatterJSON(Options{}), tc.wantJSON)
 			})
 		})
 	}
@@ -809,40 +806,40 @@ func TestRender(t *testing.T) {
 
 func TestSanitize(t *testing.T) {
 	testCases := []struct {
-		name   string
-		kv     []interface{}
-		expect []interface{}
+		name string
+		kv   []interface{}
+		want []interface{}
 	}{{
-		name:   "empty",
-		kv:     []interface{}{},
-		expect: []interface{}{},
+		name: "empty",
+		kv:   []interface{}{},
+		want: []interface{}{},
 	}, {
-		name:   "already sane",
-		kv:     makeKV("int", 1, "str", "ABC", "bool", true),
-		expect: makeKV("int", 1, "str", "ABC", "bool", true),
+		name: "already sane",
+		kv:   makeKV("int", 1, "str", "ABC", "bool", true),
+		want: makeKV("int", 1, "str", "ABC", "bool", true),
 	}, {
-		name:   "missing value",
-		kv:     makeKV("key"),
-		expect: makeKV("key", "<no-value>"),
+		name: "missing value",
+		kv:   makeKV("key"),
+		want: makeKV("key", "<no-value>"),
 	}, {
-		name:   "non-string key int",
-		kv:     makeKV(123, "val"),
-		expect: makeKV("<non-string-key: 123>", "val"),
+		name: "non-string key int",
+		kv:   makeKV(123, "val"),
+		want: makeKV("<non-string-key: 123>", "val"),
 	}, {
 		name: "non-string key struct",
 		kv: makeKV(struct {
 			F1 string
 			F2 int
 		}{"f1", 8675309}, "val"),
-		expect: makeKV(`<non-string-key: {"F1":"f1","F2":>`, "val"),
+		want: makeKV(`<non-string-key: {"F1":"f1","F2":>`, "val"),
 	}}
 
 	f := NewFormatterJSON(Options{})
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := f.sanitize(tc.kv)
-			if !reflect.DeepEqual(r, tc.expect) {
-				t.Errorf("wrong output:\nexpected %q\n     got %q", tc.expect, r)
+			if !reflect.DeepEqual(r, tc.want) {
+				t.Errorf("wrong output:\nwant %q\nhave %q", tc.want, r)
 			}
 		})
 	}
@@ -850,24 +847,24 @@ func TestSanitize(t *testing.T) {
 
 func TestEnabled(t *testing.T) {
 	t.Run("default V", func(t *testing.T) {
-		log := newSink(func(prefix, args string) {}, NewFormatter(Options{}))
+		log := newSink(io.Discard, NewFormatter(Options{}))
 		if !log.Enabled(0) {
-			t.Errorf("expected true")
+			t.Errorf("want true")
 		}
 		if log.Enabled(1) {
-			t.Errorf("expected false")
+			t.Errorf("want false")
 		}
 	})
 	t.Run("V=9", func(t *testing.T) {
-		log := newSink(func(prefix, args string) {}, NewFormatter(Options{Verbosity: 9}))
+		log := newSink(io.Discard, NewFormatter(Options{Verbosity: 9}))
 		if !log.Enabled(8) {
-			t.Errorf("expected true")
+			t.Errorf("want true")
 		}
 		if !log.Enabled(9) {
-			t.Errorf("expected true")
+			t.Errorf("want true")
 		}
 		if log.Enabled(10) {
-			t.Errorf("expected false")
+			t.Errorf("want false")
 		}
 	})
 }
@@ -882,26 +879,27 @@ func (c *capture) Func(prefix, args string) {
 
 func TestInfo(t *testing.T) {
 	testCases := []struct {
-		name   string
-		args   []interface{}
-		expect string
+		name string
+		args []interface{}
+		want string
 	}{{
-		name:   "just msg",
-		args:   makeKV(),
-		expect: ` "level"=0 "msg"="msg"`,
+		name: "just msg",
+		args: makeKV(),
+		want: `"level"="info" "logger"="root" "msg"="msg"`,
 	}, {
-		name:   "primitives",
-		args:   makeKV("int", 1, "str", "ABC", "bool", true),
-		expect: ` "level"=0 "msg"="msg" "int"=1 "str"="ABC" "bool"=true`,
+		name: "primitives",
+		args: makeKV("int", 1, "str", "ABC", "bool", true),
+		want: `"level"="info" "logger"="root" "msg"="msg" "int"=1 "str"="ABC" "bool"=true`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			sink.Info(0, "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -909,106 +907,127 @@ func TestInfo(t *testing.T) {
 
 func TestInfoWithCaller(t *testing.T) {
 	t.Run("LogCaller=All", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: All}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
 		sink.Info(0, "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "level"=0 "msg"="msg"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
+
+		bb.Reset()
 		sink.Error(fmt.Errorf("error"), "msg")
 		_, file, line, _ = runtime.Caller(0)
-		expect = fmt.Sprintf(` "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=All, LogCallerFunc=true", func(t *testing.T) {
 		thisFunc := "github.com/ethersphere/bee/pkg/log/internal.TestInfoWithCaller.func2"
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: All, LogCallerFunc: true}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: All, LogCallerFunc: true}))
 		sink.Info(0, "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d,"function":%q} "level"=0 "msg"="msg"`, filepath.Base(file), line-1, thisFunc)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg"`, filepath.Base(file), line-1, thisFunc)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
+
+		bb.Reset()
 		sink.Error(fmt.Errorf("error"), "msg")
 		_, file, line, _ = runtime.Caller(0)
-		expect = fmt.Sprintf(` "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg" "error"="error"`, filepath.Base(file), line-1, thisFunc)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg" "error"="error"`, filepath.Base(file), line-1, thisFunc)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=Info", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: Info}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: Info}))
 		sink.Info(0, "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "level"=0 "msg"="msg"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
+
+		bb.Reset()
 		sink.Error(fmt.Errorf("error"), "msg")
-		expect = ` "msg"="msg" "error"="error"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want = `"level"="error" "logger"="root" "msg"="msg" "error"="error"`
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=Error", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: Error}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: Error}))
 		sink.Info(0, "msg")
-		expect := ` "level"=0 "msg"="msg"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := `"level"="info" "logger"="root" "msg"="msg"`
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
+
+		bb.Reset()
 		sink.Error(fmt.Errorf("error"), "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect = fmt.Sprintf(` "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=None", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: None}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: None}))
 		sink.Info(0, "msg")
-		expect := ` "level"=0 "msg"="msg"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := `"level"="info" "logger"="root" "msg"="msg"`
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
+
+		bb.Reset()
 		sink.Error(fmt.Errorf("error"), "msg")
-		expect = ` "msg"="msg" "error"="error"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want = `"level"="error" "logger"="root" "msg"="msg" "error"="error"`
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 }
 
 func TestError(t *testing.T) {
 	testCases := []struct {
-		name   string
-		args   []interface{}
-		expect string
+		name string
+		args []interface{}
+		want string
 	}{{
-		name:   "just msg",
-		args:   makeKV(),
-		expect: ` "msg"="msg" "error"="err"`,
+		name: "just msg",
+		args: makeKV(),
+		want: `"level"="error" "logger"="root" "msg"="msg" "error"="err"`,
 	}, {
-		name:   "primitives",
-		args:   makeKV("int", 1, "str", "ABC", "bool", true),
-		expect: ` "msg"="msg" "error"="err" "int"=1 "str"="ABC" "bool"=true`,
+		name: "primitives",
+		args: makeKV("int", 1, "str", "ABC", "bool", true),
+		want: `"level"="error" "logger"="root" "msg"="msg" "error"="err" "int"=1 "str"="ABC" "bool"=true`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -1016,73 +1035,78 @@ func TestError(t *testing.T) {
 
 func TestErrorWithCaller(t *testing.T) {
 	t.Run("LogCaller=All", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: All}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=Error", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: Error}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: Error}))
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(0)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=Info", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: Info}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: Info}))
 		sink.Error(fmt.Errorf("err"), "msg")
-		expect := ` "msg"="msg" "error"="err"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 	t.Run("LogCaller=None", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: None}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: None}))
 		sink.Error(fmt.Errorf("err"), "msg")
-		expect := ` "msg"="msg" "error"="err"`
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 }
 
 func TestInfoWithName(t *testing.T) {
 	testCases := []struct {
-		name   string
-		names  []string
-		args   []interface{}
-		expect string
+		name  string
+		names []string
+		args  []interface{}
+		want  string
 	}{{
-		name:   "one",
-		names:  []string{"pfx1"},
-		args:   makeKV("k", "v"),
-		expect: `pfx1 "level"=0 "msg"="msg" "k"="v"`,
+		name:  "one",
+		names: []string{"pfx1"},
+		args:  makeKV("k", "v"),
+		want:  `"level"="info" "logger"="root/pfx1" "msg"="msg" "k"="v"`,
 	}, {
-		name:   "two",
-		names:  []string{"pfx1", "pfx2"},
-		args:   makeKV("k", "v"),
-		expect: `pfx1/pfx2 "level"=0 "msg"="msg" "k"="v"`,
+		name:  "two",
+		names: []string{"pfx1", "pfx2"},
+		args:  makeKV("k", "v"),
+		want:  `"level"="info" "logger"="root/pfx1/pfx2" "msg"="msg" "k"="v"`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			for _, n := range tc.names {
 				sink = sink.WithName(n)
 			}
 			sink.Info(0, "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -1090,32 +1114,33 @@ func TestInfoWithName(t *testing.T) {
 
 func TestErrorWithName(t *testing.T) {
 	testCases := []struct {
-		name   string
-		names  []string
-		args   []interface{}
-		expect string
+		name  string
+		names []string
+		args  []interface{}
+		want  string
 	}{{
-		name:   "one",
-		names:  []string{"pfx1"},
-		args:   makeKV("k", "v"),
-		expect: `pfx1 "msg"="msg" "error"="err" "k"="v"`,
+		name:  "one",
+		names: []string{"pfx1"},
+		args:  makeKV("k", "v"),
+		want:  `"level"="error" "logger"="root/pfx1" "msg"="msg" "error"="err" "k"="v"`,
 	}, {
-		name:   "two",
-		names:  []string{"pfx1", "pfx2"},
-		args:   makeKV("k", "v"),
-		expect: `pfx1/pfx2 "msg"="msg" "error"="err" "k"="v"`,
+		name:  "two",
+		names: []string{"pfx1", "pfx2"},
+		args:  makeKV("k", "v"),
+		want:  `"level"="error" "logger"="root/pfx1/pfx2" "msg"="msg" "error"="err" "k"="v"`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			for _, n := range tc.names {
 				sink = sink.WithName(n)
 			}
 			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -1126,37 +1151,38 @@ func TestInfoWithValues(t *testing.T) {
 		name   string
 		values []interface{}
 		args   []interface{}
-		expect string
+		want   string
 	}{{
 		name:   "zero",
 		values: makeKV(),
 		args:   makeKV("k", "v"),
-		expect: ` "level"=0 "msg"="msg" "k"="v"`,
+		want:   `"level"="info" "logger"="root" "msg"="msg" "k"="v"`,
 	}, {
 		name:   "one",
 		values: makeKV("one", 1),
 		args:   makeKV("k", "v"),
-		expect: ` "level"=0 "msg"="msg" "one"=1 "k"="v"`,
+		want:   `"level"="info" "logger"="root" "msg"="msg" "one"=1 "k"="v"`,
 	}, {
 		name:   "two",
 		values: makeKV("one", 1, "two", 2),
 		args:   makeKV("k", "v"),
-		expect: ` "level"=0 "msg"="msg" "one"=1 "two"=2 "k"="v"`,
+		want:   `"level"="info" "logger"="root" "msg"="msg" "one"=1 "two"=2 "k"="v"`,
 	}, {
 		name:   "dangling",
 		values: makeKV("dangling"),
 		args:   makeKV("k", "v"),
-		expect: ` "level"=0 "msg"="msg" "dangling"="<no-value>" "k"="v"`,
+		want:   `"level"="info" "logger"="root" "msg"="msg" "dangling"="<no-value>" "k"="v"`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			sink = sink.WithValues(tc.values...)
 			sink.Info(0, "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -1167,37 +1193,38 @@ func TestErrorWithValues(t *testing.T) {
 		name   string
 		values []interface{}
 		args   []interface{}
-		expect string
+		want   string
 	}{{
 		name:   "zero",
 		values: makeKV(),
 		args:   makeKV("k", "v"),
-		expect: ` "msg"="msg" "error"="err" "k"="v"`,
+		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "k"="v"`,
 	}, {
 		name:   "one",
 		values: makeKV("one", 1),
 		args:   makeKV("k", "v"),
-		expect: ` "msg"="msg" "error"="err" "one"=1 "k"="v"`,
+		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "one"=1 "k"="v"`,
 	}, {
 		name:   "two",
 		values: makeKV("one", 1, "two", 2),
 		args:   makeKV("k", "v"),
-		expect: ` "msg"="msg" "error"="err" "one"=1 "two"=2 "k"="v"`,
+		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "one"=1 "two"=2 "k"="v"`,
 	}, {
 		name:   "dangling",
 		values: makeKV("dangling"),
 		args:   makeKV("k", "v"),
-		expect: ` "msg"="msg" "error"="err" "dangling"="<no-value>" "k"="v"`,
+		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "dangling"="<no-value>" "k"="v"`,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := &capture{}
-			sink := newSink(cap.Func, NewFormatter(Options{}))
+			bb := new(bytes.Buffer)
+			sink := newSink(bb, NewFormatter(Options{}))
 			sink = sink.WithValues(tc.values...)
 			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			if cap.log != tc.expect {
-				t.Errorf("\nexpected %q\n     got %q", tc.expect, cap.log)
+			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+			if have != tc.want {
+				t.Errorf("\nwant %q\nhave %q", tc.want, have)
 			}
 		})
 	}
@@ -1205,44 +1232,47 @@ func TestErrorWithValues(t *testing.T) {
 
 func TestInfoWithCallDepth(t *testing.T) {
 	t.Run("one", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: All}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
 		dSink, _ := sink.(logr.CallDepthLogSink)
 		sink = dSink.WithCallDepth(1)
 		sink.Info(0, "msg")
 		_, file, line, _ := runtime.Caller(1)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "level"=0 "msg"="msg"`, filepath.Base(file), line)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 }
 
 func TestErrorWithCallDepth(t *testing.T) {
 	t.Run("one", func(t *testing.T) {
-		cap := &capture{}
-		sink := newSink(cap.Func, NewFormatter(Options{LogCaller: All}))
+		bb := new(bytes.Buffer)
+		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
 		dSink, _ := sink.(logr.CallDepthLogSink)
 		sink = dSink.WithCallDepth(1)
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(1)
-		expect := fmt.Sprintf(` "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line)
-		if cap.log != expect {
-			t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line)
+		if have != want {
+			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
 }
 
 func TestOptionsTimestampFormat(t *testing.T) {
-	cap := &capture{}
+	bb := new(bytes.Buffer)
 	//  This timestamp format contains none of the characters that are
 	//  considered placeholders, so will produce a constant result.
-	sink := newSink(cap.Func, NewFormatter(Options{LogTimestamp: true, TimestampFormat: "TIMESTAMP"}))
+	sink := newSink(bb, NewFormatter(Options{LogTimestamp: true, TimestampFormat: "TIMESTAMP"}))
 	dSink, _ := sink.(logr.CallDepthLogSink)
 	sink = dSink.WithCallDepth(1)
 	sink.Info(0, "msg")
-	expect := ` "ts"="TIMESTAMP" "level"=0 "msg"="msg"`
-	if cap.log != expect {
-		t.Errorf("\nexpected %q\n     got %q", expect, cap.log)
+	have := string(bytes.TrimRight(bb.Bytes(), "\n"))
+	want := `"time"="TIMESTAMP" "level"="info" "logger"="root" "msg"="msg"`
+	if have != want {
+		t.Errorf("\nwant %q\nhave %q", want, have)
 	}
 }

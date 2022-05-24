@@ -583,19 +583,17 @@ func invokeError(e error) (ret string) {
 }
 
 func (f Formatter) caller() Caller {
-	// +1 for this frame, +1 for Info/Error.
-	pc, file, line, ok := runtime.Caller(f.depth + 2)
+	pc, file, line, ok := runtime.Caller(f.depth + 3)
 	if !ok {
 		return Caller{"<unknown>", 0, ""}
 	}
-	fn := ""
+	caller := Caller{File: filepath.Base(file), Line: line}
 	if f.opts.LogCallerFunc {
 		if fp := runtime.FuncForPC(pc); fp != nil {
-			fn = fp.Name()
+			caller.Func = fp.Name()
 		}
 	}
-
-	return Caller{filepath.Base(file), line, fn}
+	return caller
 }
 
 func (f Formatter) nonStringKey(v interface{}) string {
@@ -631,11 +629,10 @@ func (f Formatter) sanitize(kvList []interface{}) []interface{} {
 
 func (f Formatter) base(level string) []interface{} {
 	args := make([]interface{}, 0, 64) // using a constant here impacts perf
-	args = append(args, "level", level, "logger", f.prefix)
 	if f.opts.LogTimestamp {
 		args = append(args, "time", time.Now().Format(f.opts.TimestampFormat))
 	}
-	return args
+	return append(args, "level", level, "logger", f.prefix)
 }
 
 // Init configures this Formatter from runtime info, such as the call depth
