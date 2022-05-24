@@ -5,13 +5,12 @@
 package log
 
 import (
+	"os"
 	"sync"
 
 	"github.com/ethersphere/bee/pkg/log/internal"
-	"github.com/go-logr/zapr"
 	"github.com/go-logr/zerologr"
 	"github.com/rs/zerolog"
-	"go.uber.org/zap"
 )
 
 func init() {
@@ -24,11 +23,11 @@ func init() {
 var registry = struct {
 	sync.RWMutex
 
-	levels  map[string]zap.AtomicLevel
-	loggers map[string]*zap.Logger
+	levels  map[string]int
+	loggers map[string]*Logger
 }{
-	levels:  make(map[string]zap.AtomicLevel),
-	loggers: make(map[string]*zap.Logger),
+	levels:  make(map[string]int),
+	loggers: make(map[string]*Logger),
 }
 
 func NewLogger(name string) *Logger {
@@ -37,11 +36,19 @@ func NewLogger(name string) *Logger {
 
 	logger, ok := registry.loggers[name]
 	if ok {
-		return &Logger{zapr.NewLogger(logger)}
+		return logger
 	}
 
-	logger := internal.VLogger{}
+	// modify glog for creating local logger instances
+	// modify loggr.functor for not having levels...
+	// INFO, WARN, ERROR - normal
+	// DEBUG - with V levels
+	// Flat hierarchy with tree-emulated hierarchy using string: "root", "root/child1", etc...
 
+	logger = &Logger{
+		sink: os.Stderr,
+		formatter: internal.NewFormatter(internal.Options{LogCaller: internal.All}),
+	}
 	registry.loggers[name] = logger
-	return &Logger{zapr.NewLogger(logger)}
+	return logger
 }

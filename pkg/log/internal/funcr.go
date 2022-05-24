@@ -190,7 +190,7 @@ type Formatter struct {
 }
 
 // render produces a log line, ready to use.
-func (f Formatter) render(builtins, args []interface{}) string {
+func (f Formatter) render(builtins, args []interface{}) []byte {
 	// Empirically bytes.Buffer is faster than strings.Builder for this.
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
 	if f.outputFormat == outputJSON {
@@ -221,7 +221,8 @@ func (f Formatter) render(builtins, args []interface{}) string {
 	if f.outputFormat == outputJSON {
 		buf.WriteByte('}')
 	}
-	return buf.String()
+	buf.WriteByte('\n')
+	return buf.Bytes()
 }
 
 // flatten renders a list of key-value pairs into a buffer.  If continuing is
@@ -503,7 +504,7 @@ func newFormatter(opts Options, outfmt outputFormat) Formatter {
 	}
 	f := Formatter{
 		outputFormat: outfmt,
-		prefix:       "",
+		prefix:       "root",
 		values:       nil,
 		depth:        0,
 		opts:         opts,
@@ -628,6 +629,15 @@ func (f Formatter) sanitize(kvList []interface{}) []interface{} {
 	return kvList
 }
 
+func (f Formatter) base(level string) []interface{} {
+	args := make([]interface{}, 0, 64) // using a constant here impacts perf
+	args = append(args, "level", level, "logger", f.prefix)
+	if f.opts.LogTimestamp {
+		args = append(args, "time", time.Now().Format(f.opts.TimestampFormat))
+	}
+	return args
+}
+
 // Init configures this Formatter from runtime info, such as the call depth
 // imposed by logr itself.
 func (f *Formatter) Init(callDepth int) {
@@ -648,36 +658,20 @@ func (f Formatter) GetDepth() int {
 // FormatInfo renders an Info log message into strings.  The prefix will be
 // empty when no names were set (via AddNames), or when the output is
 // configured for JSON.
-func (f Formatter) FormatInfo(level int, msg string, kvList []interface{}) (prefix, argsStr string) {
-	args := make([]interface{}, 0, 64) // using a constant here impacts perf
-	prefix = f.prefix
-	if f.outputFormat == outputJSON {
-		args = append(args, "logger", prefix)
-		prefix = ""
-	}
-	if f.opts.LogTimestamp {
-		args = append(args, "ts", time.Now().Format(f.opts.TimestampFormat))
-	}
+func (f Formatter) FormatInfo(msg string, kvList []interface{}) []byte {
+	args := f.base("info")
 	if policy := f.opts.LogCaller; policy == All || policy == Info {
 		args = append(args, "caller", f.caller())
 	}
-	args = append(args, "level", level, "msg", msg)
-	return prefix, f.render(args, kvList)
+	args = append(args, "msg", msg)
+	return f.render(args, kvList)
 }
 
 // FormatError renders an Error log message into strings.  The prefix will be
 // empty when no names were set (via AddNames),  or when the output is
 // configured for JSON.
-func (f Formatter) FormatError(err error, msg string, kvList []interface{}) (prefix, argsStr string) {
-	args := make([]interface{}, 0, 64) // using a constant here impacts perf
-	prefix = f.prefix
-	if f.outputFormat == outputJSON {
-		args = append(args, "logger", prefix)
-		prefix = ""
-	}
-	if f.opts.LogTimestamp {
-		args = append(args, "ts", time.Now().Format(f.opts.TimestampFormat))
-	}
+func (f Formatter) FormatError(err error, msg string, kvList []interface{}) []byte {
+	args := f.base("error")
 	if policy := f.opts.LogCaller; policy == All || policy == Error {
 		args = append(args, "caller", f.caller())
 	}
@@ -687,7 +681,22 @@ func (f Formatter) FormatError(err error, msg string, kvList []interface{}) (pre
 		loggableErr = err.Error()
 	}
 	args = append(args, "error", loggableErr)
-	return f.prefix, f.render(args, kvList)
+	return f.render(args, kvList)
+}
+
+// FormatDebug renders a Debug log message into strings.  The prefix will be
+// empty when no names were set (via AddNames), or when the output is
+// configured for JSON.
+func (f Formatter) FormatDebug(v int, msg string, kvList []interface{}) []byte {
+	args := f.base("debug")
+	if v > 0 {
+		args = append(args, "v", v)
+	}
+	if policy := f.opts.LogCaller; policy == All || policy == Info {
+		args = append(args, "caller", f.caller())
+	}
+	args = append(args, "msg", msg)
+	return f.render(args, kvList)
 }
 
 // AddName appends the specified name.  funcr uses '/' characters to separate

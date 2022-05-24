@@ -5,8 +5,10 @@
 package log
 
 import (
+	"fmt"
+	"io"
+
 	"github.com/ethersphere/bee/pkg/log/internal"
-	"github.com/go-logr/logr"
 )
 
 // Marshaler is an optional interface that logged values may choose to
@@ -17,13 +19,22 @@ type Marshaler = internal.Marshaler
 
 // Logger provides the basic logger functionality.
 type Logger struct {
-	logger logr.Logger
+	verbosity int
+	formatter internal.Formatter
+	sink      io.Writer
 }
 
 // Enabled tests whether this Logger is enabled.  For example, commandline
 // flags might be used to set the logging verbosity and disable some info logs.
 func (l Logger) Enabled() bool {
-	return l.logger.Enabled()
+	return true // TODO
+}
+
+func (l Logger) Debug(msg string, keysAndValues ...interface{}) {
+	buf := l.formatter.FormatDebug(l.verbosity, msg, keysAndValues)
+	if _, err := l.sink.Write(buf); err != nil {
+		fmt.Printf("log.Debug: unable to write buffer: %s\n", buf)
+	}
 }
 
 // Info logs a non-error message with the given key/value pairs as context.
@@ -33,7 +44,10 @@ func (l Logger) Enabled() bool {
 // information.  The key/value pairs must alternate string keys and arbitrary
 // values.
 func (l Logger) Info(msg string, keysAndValues ...interface{}) {
-	l.logger.Info(msg, keysAndValues...)
+	buf := l.formatter.FormatInfo(msg, keysAndValues)
+	if _, err := l.sink.Write(buf); err != nil {
+		fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
+	}
 }
 
 // Error logs an error, with the given message and key/value pairs as context.
@@ -47,21 +61,29 @@ func (l Logger) Info(msg string, keysAndValues ...interface{}) {
 // triggered this log line, if present. The err parameter is optional
 // and nil may be passed instead of an error instance.
 func (l Logger) Error(err error, msg string, keysAndValues ...interface{}) {
-	l.logger.Error(err, msg, keysAndValues...)
+	buf := l.formatter.FormatError(err, msg, keysAndValues)
+	if _, err := l.sink.Write(buf); err != nil {
+		fmt.Printf("log.Error: unable to write buffer: %s\n", buf)
+	}
 }
 
 // V returns a new Logger instance for a specific verbosity level, relative to
 // this Logger.  In other words, V-levels are additive.  A higher verbosity
 // level means a log message is less important.  Negative V-levels are treated
 // as 0.
-func (l Logger) V(level int) Logger {
-	return Logger{logger: l.logger.V(level)}
+func (l Logger) V(verbosity int) Logger {
+	return Logger{
+		verbosity: l.verbosity + verbosity,
+		sink:      l.sink,
+		formatter: l.formatter,
+	}
 }
 
 // WithValues returns a new Logger instance with additional key/value pairs.
 // See Info for documentation on how key/value pairs work.
 func (l Logger) WithValues(keysAndValues ...interface{}) Logger {
-	return Logger{logger: l.logger.WithValues(keysAndValues...)}
+	l.formatter.AddValues(keysAndValues) // TODO: new logger
+	return l
 }
 
 // WithName returns a new Logger instance with the specified name element added
@@ -70,7 +92,8 @@ func (l Logger) WithValues(keysAndValues ...interface{}) Logger {
 // contain only letters, digits, and hyphens (see the package documentation for
 // more information).
 func (l Logger) WithName(name string) Logger {
-	return Logger{logger: l.logger.WithName(name)}
+	l.formatter.AddName(name) // TODO: new logger
+	return l
 }
 
 // WithCallDepth returns a Logger instance that offsets the call stack by the
@@ -89,7 +112,8 @@ func (l Logger) WithName(name string) Logger {
 // WithCallDepth(1) because it works with implementions that support the
 // CallDepthLogSink and/or CallStackHelperLogSink interfaces.
 func (l Logger) WithCallDepth(depth int) Logger {
-	return Logger{logger: l.logger.WithCallDepth(depth)}
+	l.formatter.AddCallDepth(depth) // TODO: new logger
+	return l
 }
 
 // WithCallStackHelper returns a new Logger instance that skips the direct
@@ -107,6 +131,5 @@ func (l Logger) WithCallDepth(depth int) Logger {
 // implementation does not support either of these, the original Logger will be
 // returned.
 func (l Logger) WithCallStackHelper() (func(), Logger) {
-	fn, lgr := l.logger.WithCallStackHelper()
-	return fn, Logger{logger: lgr}
+	return func() {}, l // TODO:!
 }

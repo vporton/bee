@@ -45,11 +45,14 @@ var beeWelcomeMessage string
 func (c *command) initStartCmd() (err error) {
 
 	logger := log.NewLogger("test")
-	logger.Info("IT WORKS!")
-	logger.V(1).Info("IT WORKS!")
-	logger.V(2).Info("IT WORKS!")
-	logger.V(3).Info("IT WORKS!")
-	//return nil
+	logger.Debug("IT WORKS!", "value", 1)
+	l := logger.V(1)
+	l.Debug("IT WORKS!", "value", 1)
+	l.V(1).Debug("IT WORKS!", "value", 2)
+	logger.Info("IT WORKS!", "value", 2)
+	logger.Error(nil, "IT WORKS!", "value", 3)
+	logger.WithName("test_name").WithName("test_name").Info("IT WORKS!")
+	return nil
 
 	cmd := &cobra.Command{
 		Use:   "start",
