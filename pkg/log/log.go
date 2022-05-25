@@ -7,9 +7,36 @@ package log
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"sync/atomic"
 
 	"github.com/ethersphere/bee/pkg/log/internal"
 )
+
+// TODO: document interfaces!
+
+type builder interface {
+	WithName(name string) Logger
+	WithValues(keysAndValues ...interface{}) Logger
+}
+
+type Verbose interface {
+	builder
+
+	Enabled() bool
+	V(v uint) Verbose
+	Debug(msg string, keysAndValues ...interface{})
+}
+
+type Logger interface {
+	Verbose
+
+	Info(msg string, keysAndValues ...interface{})
+
+	Warning(msg string, keysAndValues ...interface{})
+
+	Error(err error, msg string, keysAndValues ...interface{})
+}
 
 // Marshaler is an optional interface that logged values may choose to
 // implement. Loggers with structured output, such as JSON, should
@@ -17,28 +44,62 @@ import (
 // original value.
 type Marshaler = internal.Marshaler
 
-// Logger provides the basic logger functionality.
-type Logger struct {
-	verbosity int
-	formatter internal.Formatter
-	sink      io.Writer
+// Level specifies a level of verbosity for V logs.
+// Level should be modified only through its set method.
+// Level is treated as a sync/atomic int32.
+type Level int32
+
+// get returns the value of the Level.
+func (l *Level) get() Level {
+	return Level(atomic.LoadInt32((*int32)(l)))
 }
 
-func (l *Logger) clone() *Logger {
+// set sets the value of the Level.
+func (l *Level) set(val Level) {
+	atomic.StoreInt32((*int32)(l), int32(val))
+}
+
+// add adds value to this Level and returns the new value.
+func (l *Level) add(val Level) Level {
+	return Level(atomic.AddInt32((*int32)(l), int32(val.get())))
+}
+
+// String implements the fmt.Stringer interface.
+func (l *Level) String() string { return strconv.FormatInt(int64(*l), 10) }
+
+const (
+	Off = Level(iota - 4)
+	Error
+	Warning
+	Info
+	Debug
+)
+
+// Logger provides the basic logger functionality.
+type basicLogger struct {
+	sink      io.Writer
+	debugL    uint
+	verbosity Level
+	formatter internal.Formatter
+}
+
+func (l *basicLogger) clone() *basicLogger {
 	c := *l
 	return &c
 }
 
 // Enabled tests whether this Logger is enabled.  For example, commandline
 // flags might be used to set the logging verbosity and disable some info logs.
-func (l *Logger) Enabled() bool {
-	return true // TODO
+func (l *basicLogger) Enabled() bool {
+	return l.verbosity < Off
 }
 
-func (l *Logger) Debug(msg string, keysAndValues ...interface{}) {
-	buf := l.formatter.FormatDebug(l.verbosity, msg, keysAndValues)
-	if _, err := l.sink.Write(buf); err != nil {
-		fmt.Printf("log.Debug: unable to write buffer: %s\n", buf)
+func (l *basicLogger) Debug(msg string, keysAndValues ...interface{}) { // 0
+	if int(l.verbosity.get()) >= int(l.debugL) {
+		buf := l.formatter.FormatDebug(l.debugL, msg, keysAndValues)
+		if _, err := l.sink.Write(buf); err != nil {
+			fmt.Printf("log.Debug: unable to write buffer: %s\n", buf)
+		}
 	}
 }
 
@@ -48,11 +109,27 @@ func (l *Logger) Debug(msg string, keysAndValues ...interface{}) {
 // line.  The key/value pairs can then be used to add additional variable
 // information.  The key/value pairs must alternate string keys and arbitrary
 // values.
-func (l *Logger) Info(msg string, keysAndValues ...interface{}) {
-	buf := l.formatter.FormatInfo(msg, keysAndValues)
-	if _, err := l.sink.Write(buf); err != nil {
-		fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
+func (l *basicLogger) Info(msg string, keysAndValues ...interface{}) { // -1
+	if l.verbosity >= Info {
+		buf := l.formatter.FormatInfo(msg, keysAndValues)
+		if _, err := l.sink.Write(buf); err != nil {
+			fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
+		}
 	}
+}
+
+// TODO:
+func (l *basicLogger) Warning(msg string, keysAndValues ...interface{}) { // -2
+	if l.verbosity >= Warning {
+		buf := l.formatter.FormatInfo(msg, keysAndValues)
+		if _, err := l.sink.Write(buf); err != nil {
+			fmt.Printf("log.Warning: unable to write buffer: %s\n", buf)
+		}
+	}
+	//buf := l.formatter.FormatInfo(msg, keysAndValues)
+	//if _, err := l.sink.Write(buf); err != nil {
+	//	fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
+	//}
 }
 
 // Error logs an error, with the given message and key/value pairs as context.
@@ -65,10 +142,12 @@ func (l *Logger) Info(msg string, keysAndValues ...interface{}) {
 // while the err argument should be used to attach the actual error that
 // triggered this log line, if present. The err parameter is optional
 // and nil may be passed instead of an error instance.
-func (l *Logger) Error(err error, msg string, keysAndValues ...interface{}) {
-	buf := l.formatter.FormatError(err, msg, keysAndValues)
-	if _, err := l.sink.Write(buf); err != nil {
-		fmt.Printf("log.Error: unable to write buffer: %s\n", buf)
+func (l *basicLogger) Error(err error, msg string, keysAndValues ...interface{}) { // -3
+	if l.verbosity >= Error {
+		buf := l.formatter.FormatError(err, msg, keysAndValues)
+		if _, err := l.sink.Write(buf); err != nil {
+			fmt.Printf("log.Error: unable to write buffer: %s\n", buf)
+		}
 	}
 }
 
@@ -76,15 +155,15 @@ func (l *Logger) Error(err error, msg string, keysAndValues ...interface{}) {
 // this Logger.  In other words, V-levels are additive.  A higher verbosity
 // level means a log message is less important.  Negative V-levels are treated
 // as 0.
-func (l *Logger) V(verbosity int) *Logger {
+func (l *basicLogger) V(level uint) Verbose {
 	c := l.clone()
-	c.verbosity += verbosity
+	c.debugL += level
 	return c
 }
 
 // WithValues returns a new Logger instance with additional key/value pairs.
 // See Info for documentation on how key/value pairs work.
-func (l *Logger) WithValues(keysAndValues ...interface{}) *Logger {
+func (l *basicLogger) WithValues(keysAndValues ...interface{}) Logger {
 	c := l.clone()
 	c.formatter.AddValues(keysAndValues)
 	return c
@@ -95,29 +174,8 @@ func (l *Logger) WithValues(keysAndValues ...interface{}) *Logger {
 // suffixes to the Logger's name.  It's strongly recommended that name segments
 // contain only letters, digits, and hyphens (see the package documentation for
 // more information).
-func (l *Logger) WithName(name string) *Logger {
+func (l *basicLogger) WithName(name string) Logger {
 	c := l.clone()
 	c.formatter.AddName(name)
-	return c
-}
-
-// WithCallDepth returns a Logger instance that offsets the call stack by the
-// specified number of frames when logging call site information, if possible.
-// This is useful for users who have helper functions between the "real" call
-// site and the actual calls to Logger methods.  If depth is 0 the attribution
-// should be to the direct caller of this function.  If depth is 1 the
-// attribution should skip 1 call frame, and so on.  Successive calls to this
-// are additive.
-//
-// If the underlying log implementation supports a WithCallDepth(int) method,
-// it will be called and the result returned.  If the implementation does not
-// support CallDepthLogSink, the original Logger will be returned.
-//
-// To skip one level, WithCallStackHelper() should be used instead of
-// WithCallDepth(1) because it works with implementions that support the
-// CallDepthLogSink and/or CallStackHelperLogSink interfaces.
-func (l *Logger) WithCallDepth(depth int) *Logger {
-	c := l.clone()
-	c.formatter.AddCallDepth(depth)
 	return c
 }

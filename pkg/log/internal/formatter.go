@@ -635,6 +635,8 @@ func (f Formatter) base(level string) []interface{} {
 	return append(args, "level", level, "logger", f.prefix)
 }
 
+// TODO: lift the code below to logger.
+
 // Init configures this Formatter from runtime info, such as the call depth
 // imposed by logr itself.
 func (f *Formatter) Init(callDepth int) {
@@ -684,7 +686,7 @@ func (f Formatter) FormatError(err error, msg string, kvList []interface{}) []by
 // FormatDebug renders a Debug log message into strings.  The prefix will be
 // empty when no names were set (via AddNames), or when the output is
 // configured for JSON.
-func (f Formatter) FormatDebug(v int, msg string, kvList []interface{}) []byte {
+func (f Formatter) FormatDebug(v uint, msg string, kvList []interface{}) []byte {
 	args := f.base("debug")
 	if v > 0 {
 		args = append(args, "v", v)

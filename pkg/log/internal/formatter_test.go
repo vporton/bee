@@ -24,7 +24,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/go-logr/logr"
+	"github.com/go-logr/logr" // TODO: remove
 )
 
 // Assert conformance to the interfaces.

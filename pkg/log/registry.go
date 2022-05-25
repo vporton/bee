@@ -24,13 +24,13 @@ var registry = struct {
 	sync.RWMutex
 
 	levels  map[string]int
-	loggers map[string]*Logger
+	loggers map[string]*basicLogger
 }{
 	levels:  make(map[string]int),
-	loggers: make(map[string]*Logger),
+	loggers: make(map[string]*basicLogger),
 }
 
-func NewLogger(name string) *Logger {
+func NewLogger(name string) *basicLogger {
 	registry.Lock()
 	defer registry.Unlock()
 
@@ -45,7 +45,7 @@ func NewLogger(name string) *Logger {
 	// DEBUG - with V levels
 	// Flat hierarchy with tree-emulated hierarchy using string: "root", "root/child1", etc...
 
-	logger = &Logger{
+	logger = &basicLogger{
 		sink: os.Stderr,
 		formatter: internal.NewFormatter(
 			internal.Options{
@@ -54,6 +54,7 @@ func NewLogger(name string) *Logger {
 				//LogCallerFunc: true,
 			},
 		),
+		verbosity: 2,
 	}
 	registry.loggers[name] = logger
 	return logger
