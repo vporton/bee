@@ -12,7 +12,7 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-package internal
+package log
 
 import (
 	"bytes"
@@ -23,54 +23,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
-
-	"github.com/go-logr/logr" // TODO: remove
 )
-
-// Assert conformance to the interfaces.
-var _ logr.LogSink = &fnlogger{}
-var _ logr.CallDepthLogSink = &fnlogger{}
-
-// fnlogger inherits some of its LogSink implementation from Formatter
-// and just needs to add some glue code.
-type fnlogger struct {
-	Formatter
-	sink io.Writer
-}
-
-func (l fnlogger) Init(info logr.RuntimeInfo) {
-	l.Formatter.Init(info.CallDepth)
-}
-
-func (l fnlogger) WithName(name string) logr.LogSink {
-	l.Formatter.AddName(name)
-	return &l
-}
-
-func (l fnlogger) WithValues(kvList ...interface{}) logr.LogSink {
-	l.Formatter.AddValues(kvList)
-	return &l
-}
-
-func (l fnlogger) WithCallDepth(depth int) logr.LogSink {
-	l.Formatter.AddCallDepth(depth)
-	return &l
-}
-
-func (l fnlogger) Info(level int, msg string, kvList ...interface{}) {
-	l.sink.Write(l.FormatInfo(msg, kvList))
-}
-
-func (l fnlogger) Error(err error, msg string, kvList ...interface{}) {
-	l.sink.Write(l.FormatError(err, msg, kvList))
-}
-
-func newSink(w io.Writer, formatter Formatter) logr.LogSink {
-	return &fnlogger{
-		Formatter: formatter,
-		sink:      w,
-	}
-}
 
 // Will be handled via reflection instead of type assertions.
 type substr string
@@ -447,7 +400,7 @@ func TestPretty(t *testing.T) {
 		exp: `{"Inner":"I am a logr.Marshaler"}`,
 	}, {
 		val: (*Tmarshaler)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log/internal.Tmarshaler.MarshalLog called using nil *Tmarshaler pointer>"`,
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Tmarshaler.MarshalLog called using nil *Tmarshaler pointer>"`,
 	}, {
 		val: Tmarshalerpanic{"foobar"},
 		exp: `"<panic: Tmarshalerpanic>"`,
@@ -459,7 +412,7 @@ func TestPretty(t *testing.T) {
 		exp: `"I am a fmt.Stringer"`,
 	}, {
 		val: (*Tstringer)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log/internal.Tstringer.String called using nil *Tstringer pointer>"`,
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Tstringer.String called using nil *Tstringer pointer>"`,
 	}, {
 		val: Tstringerpanic{"foobar"},
 		exp: `"<panic: Tstringerpanic>"`,
@@ -471,7 +424,7 @@ func TestPretty(t *testing.T) {
 		exp: `"I am an error"`,
 	}, {
 		val: (*Terror)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log/internal.Terror.Error called using nil *Terror pointer>"`,
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Terror.Error called using nil *Terror pointer>"`,
 	}, {
 		val: Terrorpanic{"foobar"},
 		exp: `"<panic: Terrorpanic>"`,
@@ -690,7 +643,7 @@ func TestPretty(t *testing.T) {
 		exp: `{"[{\"S\":\"\\\"quoted\\\"\"},{\"S\":\"unquoted\"}]":1}`,
 	}}
 
-	f := NewFormatter(Options{})
+	f := newFormatter(fmtOptions{})
 	for i, tc := range cases {
 		ours := f.pretty(tc.val)
 		want := ""
@@ -704,7 +657,7 @@ func TestPretty(t *testing.T) {
 			want = string(jb)
 		}
 		if ours != want {
-			t.Errorf("[%d]:\n\twant %q\n\thave%q", i, want, ours)
+			t.Errorf("[%d]:\n\twant %q\n\thave %q", i, want, ours)
 		}
 	}
 }
@@ -795,10 +748,10 @@ func TestRender(t *testing.T) {
 				}
 			}
 			t.Run("KV", func(t *testing.T) {
-				test(t, NewFormatter(Options{}), tc.wantKV)
+				test(t, newFormatter(fmtOptions{}), tc.wantKV)
 			})
 			t.Run("JSON", func(t *testing.T) {
-				test(t, NewFormatterJSON(Options{}), tc.wantJSON)
+				test(t, newFormatter(fmtOptions{outputFormat: outputJSON}), tc.wantJSON)
 			})
 		})
 	}
@@ -834,7 +787,7 @@ func TestSanitize(t *testing.T) {
 		want: makeKV(`<non-string-key: {"F1":"f1","F2":>`, "val"),
 	}}
 
-	f := NewFormatterJSON(Options{})
+	f := newFormatter(fmtOptions{outputFormat: outputJSON})
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := f.sanitize(tc.kv)
@@ -846,35 +799,16 @@ func TestSanitize(t *testing.T) {
 }
 
 func TestEnabled(t *testing.T) {
-	t.Run("default V", func(t *testing.T) {
-		log := newSink(io.Discard, NewFormatter(Options{}))
-		if !log.Enabled(0) {
-			t.Errorf("want true")
-		}
-		if log.Enabled(1) {
+	t.Run("verbosity none/all", func(t *testing.T) {
+		log := newBasicLogger(newFormatter(fmtOptions{}), io.Discard, VerbosityNone)
+		if log.Enabled() {
 			t.Errorf("want false")
 		}
-	})
-	t.Run("V=9", func(t *testing.T) {
-		log := newSink(io.Discard, NewFormatter(Options{Verbosity: 9}))
-		if !log.Enabled(8) {
+		log.setVerbosity(VerbosityAll)
+		if !log.Enabled() {
 			t.Errorf("want true")
 		}
-		if !log.Enabled(9) {
-			t.Errorf("want true")
-		}
-		if log.Enabled(10) {
-			t.Errorf("want false")
-		}
 	})
-}
-
-type capture struct {
-	log string
-}
-
-func (c *capture) Func(prefix, args string) {
-	c.log = prefix + " " + args
 }
 
 func TestInfo(t *testing.T) {
@@ -895,8 +829,8 @@ func TestInfo(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
-			sink.Info(0, "msg", tc.args...)
+			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
+			sink.Info("msg", tc.args...)
 			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 			if have != tc.want {
 				t.Errorf("\nwant %q\nhave %q", tc.want, have)
@@ -906,10 +840,10 @@ func TestInfo(t *testing.T) {
 }
 
 func TestInfoWithCaller(t *testing.T) {
-	t.Run("LogCaller=All", func(t *testing.T) {
+	t.Run("logCaller=categoryAll", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll}), bb, VerbosityAll)
+		sink.Info("msg")
 		_, file, line, _ := runtime.Caller(0)
 		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
@@ -926,11 +860,11 @@ func TestInfoWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=All, LogCallerFunc=true", func(t *testing.T) {
-		thisFunc := "github.com/ethersphere/bee/pkg/log/internal.TestInfoWithCaller.func2"
+	t.Run("logCaller=categoryAll, logCallerFunc=true", func(t *testing.T) {
+		thisFunc := "github.com/ethersphere/bee/pkg/log.TestInfoWithCaller.func2"
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: All, LogCallerFunc: true}))
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, logCallerFunc: true}), bb, VerbosityAll)
+		sink.Info("msg")
 		_, file, line, _ := runtime.Caller(0)
 		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg"`, filepath.Base(file), line-1, thisFunc)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
@@ -947,10 +881,10 @@ func TestInfoWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=Info", func(t *testing.T) {
+	t.Run("logCaller=Info", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: Info}))
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryInfo}), bb, VerbosityAll)
+		sink.Info("msg")
 		_, file, line, _ := runtime.Caller(0)
 		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
@@ -966,10 +900,10 @@ func TestInfoWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=Error", func(t *testing.T) {
+	t.Run("logCaller=Error", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: Error}))
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryError}), bb, VerbosityAll)
+		sink.Info("msg")
 		want := `"level"="info" "logger"="root" "msg"="msg"`
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 		if have != want {
@@ -985,10 +919,10 @@ func TestInfoWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=None", func(t *testing.T) {
+	t.Run("logCaller=noneCaller", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: None}))
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryNone}), bb, VerbosityAll)
+		sink.Info("msg")
 		want := `"level"="info" "logger"="root" "msg"="msg"`
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 		if have != want {
@@ -1023,7 +957,7 @@ func TestError(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
+			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
 			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
 			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 			if have != tc.want {
@@ -1034,9 +968,9 @@ func TestError(t *testing.T) {
 }
 
 func TestErrorWithCaller(t *testing.T) {
-	t.Run("LogCaller=All", func(t *testing.T) {
+	t.Run("logCaller=categoryAll", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll}), bb, VerbosityAll)
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(0)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
@@ -1045,9 +979,9 @@ func TestErrorWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=Error", func(t *testing.T) {
+	t.Run("logCaller=Error", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: Error}))
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryError}), bb, VerbosityAll)
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(0)
 		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
@@ -1056,9 +990,9 @@ func TestErrorWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=Info", func(t *testing.T) {
+	t.Run("logCaller=Info", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: Info}))
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryInfo}), bb, VerbosityAll)
 		sink.Error(fmt.Errorf("err"), "msg")
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
@@ -1066,9 +1000,9 @@ func TestErrorWithCaller(t *testing.T) {
 			t.Errorf("\nwant %q\nhave %q", want, have)
 		}
 	})
-	t.Run("LogCaller=None", func(t *testing.T) {
+	t.Run("logCaller=noneCaller", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: None}))
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryNone}), bb, VerbosityAll)
 		sink.Error(fmt.Errorf("err"), "msg")
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
@@ -1099,11 +1033,11 @@ func TestInfoWithName(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
+			var sink Logger = newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
 			for _, n := range tc.names {
 				sink = sink.WithName(n)
 			}
-			sink.Info(0, "msg", tc.args...)
+			sink.Info("msg", tc.args...)
 			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 			if have != tc.want {
 				t.Errorf("\nwant %q\nhave %q", tc.want, have)
@@ -1133,7 +1067,7 @@ func TestErrorWithName(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
+			var sink Logger = newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
 			for _, n := range tc.names {
 				sink = sink.WithName(n)
 			}
@@ -1177,9 +1111,8 @@ func TestInfoWithValues(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
-			sink = sink.WithValues(tc.values...)
-			sink.Info(0, "msg", tc.args...)
+			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll).WithValues(tc.values...)
+			sink.Info("msg", tc.args...)
 			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 			if have != tc.want {
 				t.Errorf("\nwant %q\nhave %q", tc.want, have)
@@ -1219,8 +1152,7 @@ func TestErrorWithValues(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			bb := new(bytes.Buffer)
-			sink := newSink(bb, NewFormatter(Options{}))
-			sink = sink.WithValues(tc.values...)
+			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll).WithValues(tc.values...)
 			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
 			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 			if have != tc.want {
@@ -1233,10 +1165,8 @@ func TestErrorWithValues(t *testing.T) {
 func TestInfoWithCallDepth(t *testing.T) {
 	t.Run("one", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
-		dSink, _ := sink.(logr.CallDepthLogSink)
-		sink = dSink.WithCallDepth(1)
-		sink.Info(0, "msg")
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, callerDepth: 1}), bb, VerbosityAll)
+		sink.Info("msg")
 		_, file, line, _ := runtime.Caller(1)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line)
@@ -1249,9 +1179,7 @@ func TestInfoWithCallDepth(t *testing.T) {
 func TestErrorWithCallDepth(t *testing.T) {
 	t.Run("one", func(t *testing.T) {
 		bb := new(bytes.Buffer)
-		sink := newSink(bb, NewFormatter(Options{LogCaller: All}))
-		dSink, _ := sink.(logr.CallDepthLogSink)
-		sink = dSink.WithCallDepth(1)
+		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, callerDepth: 1}), bb, VerbosityAll)
 		sink.Error(fmt.Errorf("err"), "msg")
 		_, file, line, _ := runtime.Caller(1)
 		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
@@ -1266,10 +1194,8 @@ func TestOptionsTimestampFormat(t *testing.T) {
 	bb := new(bytes.Buffer)
 	//  This timestamp format contains none of the characters that are
 	//  considered placeholders, so will produce a constant result.
-	sink := newSink(bb, NewFormatter(Options{LogTimestamp: true, TimestampFormat: "TIMESTAMP"}))
-	dSink, _ := sink.(logr.CallDepthLogSink)
-	sink = dSink.WithCallDepth(1)
-	sink.Info(0, "msg")
+	sink := newBasicLogger(newFormatter(fmtOptions{logTimestamp: true, timestampFormat: "TIMESTAMP", callerDepth: 1}), bb, VerbosityAll)
+	sink.Info("msg")
 	have := string(bytes.TrimRight(bb.Bytes(), "\n"))
 	want := `"time"="TIMESTAMP" "level"="info" "logger"="root" "msg"="msg"`
 	if have != want {

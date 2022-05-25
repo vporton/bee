@@ -8,7 +8,6 @@ import (
 	"os"
 	"sync"
 
-	"github.com/ethersphere/bee/pkg/log/internal"
 	"github.com/go-logr/zerologr"
 	"github.com/rs/zerolog"
 )
@@ -39,23 +38,19 @@ func NewLogger(name string) *basicLogger {
 		return logger
 	}
 
-	// modify glog for creating local logger instances
-	// modify loggr.functor for not having levels...
-	// INFO, WARN, ERROR - normal
-	// DEBUG - with V levels
 	// Flat hierarchy with tree-emulated hierarchy using string: "root", "root/child1", etc...
 
-	logger = &basicLogger{
-		sink: os.Stderr,
-		formatter: internal.NewFormatter(
-			internal.Options{
-				LogTimestamp: true,
-				LogCaller:    internal.All,
-				//LogCallerFunc: true,
+	logger = newBasicLogger(
+		newFormatter(
+			fmtOptions{
+				logTimestamp: true,
+				logCaller:    categoryAll,
+				//logCallerFunc: true,
 			},
 		),
-		verbosity: 2,
-	}
+		os.Stderr,
+		VerbosityAll,
+	)
 	registry.loggers[name] = logger
 	return logger
 }

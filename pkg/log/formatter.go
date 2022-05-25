@@ -12,7 +12,7 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-// Package internal implements formatting of structured log messages and
+// Package log implements formatting of structured log messages and
 // optionally captures the call site and timestamp.
 //
 // The simplest way to use it is via its implementation of a
@@ -21,16 +21,16 @@
 //
 // Custom LogSinks
 //
-// For users who need more control, a funcr.Formatter can be embedded inside
+// For users who need more control, a formatter.Formatter can be embedded inside
 // your own custom LogSink implementation. This is useful when the LogSink
 // needs to implement additional methods, for example.
 //
 // Formatting
 //
 // This will respect logr.Marshaler, fmt.Stringer, and error interfaces for
-// values which are being logged.  When rendering a struct, funcr will use Go's
+// values which are being logged.  When rendering a struct, formatter will use Go's
 // standard JSON tags (all except "string").
-package internal
+package log
 
 import (
 	"bytes"
@@ -62,89 +62,58 @@ type Marshaler interface {
 	MarshalLog() interface{}
 }
 
-// Options carries parameters which influence the way logs are generated.
-type Options struct {
-	// LogCaller tells funcr to add a "caller" key to some or all log lines.
+// fmtOptions carries parameters which influence the way logs are generated.
+type fmtOptions struct {
+	// logCaller tells formatter to add a "caller" key to some or all log lines.
 	// This has some overhead, so some users might not want it.
-	LogCaller MessageClass
+	logCaller messageCategory
 
-	// LogCallerFunc tells funcr to also log the calling function name.  This
-	// has no effect if caller logging is not enabled (see Options.LogCaller).
-	LogCallerFunc bool
+	// logCallerFunc tells formatter to also log the calling function name.
+	// This has no effect if caller logging is not enabled (see fmtOptions.logCaller).
+	logCallerFunc bool
 
-	// LogTimestamp tells funcr to add a "ts" key to log lines.  This has some
-	// overhead, so some users might not want it.
-	LogTimestamp bool
+	// logTimestamp tells formatter to add a "timestamp" key to log lines.
+	// This has some overhead, so some users might not want it.
+	logTimestamp bool
 
-	// TimestampFormat tells funcr how to render timestamps when LogTimestamp
-	// is enabled.  If not specified, a default format will be used.  For more
-	// details, see docs for Go's time.Layout.
-	TimestampFormat string
+	// timestampFormat tells formatter how to render timestamps when
+	// fmtOptions.logTimestamp is enabled. If not specified, a default
+	// format will be used. For more details, see docs for Go's time.Layout.
+	timestampFormat string
 
-	// Verbosity tells funcr which V logs to produce.  Higher values enable
-	// more logs.  Info logs at or below this level will be written, while logs
-	// above this level will be discarded.
-	Verbosity int
+	// maxLogDepth tells formatter how many levels of nested fields
+	// (e.g. a struct that contains a struct, etc.) it may log. Every time
+	// it finds a struct, slice, array, or map the depth is increased by one.
+	// When the maximum is reached, the value will be converted to a string
+	// indicating that the max depth has been exceeded. If this field is not
+	// specified, a default value will be used.
+	maxLogDepth int
 
-	// RenderBuiltinsHook allows users to mutate the list of key-value pairs
-	// while a log line is being rendered.  The kvList argument follows logr
-	// conventions - each pair of slice elements is comprised of a string key
-	// and an arbitrary value (verified and sanitized before calling this
-	// hook).  The value returned must follow the same conventions.  This hook
-	// can be used to audit or modify logged data.  For example, you might want
-	// to prefix all of funcr's built-in keys with some string.  This hook is
-	// only called for built-in (provided by funcr itself) key-value pairs.
-	// Equivalent hooks are offered for key-value pairs saved via
-	// logr.Logger.WithValues or Formatter.AddValues (see RenderValuesHook) and
-	// for user-provided pairs (see RenderArgsHook).
-	RenderBuiltinsHook func(kvList []interface{}) []interface{}
+	// outputFormat tells formatter which outputFormat to use. If this field
+	// is not specified, a default value outputKeyValue will be used.
+	outputFormat outputFormat
 
-	// RenderValuesHook is the same as RenderBuiltinsHook, except that it is
-	// only called for key-value pairs saved via logr.Logger.WithValues.  See
-	// RenderBuiltinsHook for more details.
-	RenderValuesHook func(kvList []interface{}) []interface{}
-
-	// RenderArgsHook is the same as RenderBuiltinsHook, except that it is only
-	// called for key-value pairs passed directly to Info and Error.  See
-	// RenderBuiltinsHook for more details.
-	RenderArgsHook func(kvList []interface{}) []interface{}
-
-	// MaxLogDepth tells funcr how many levels of nested fields (e.g. a struct
-	// that contains a struct, etc.) it may log.  Every time it finds a struct,
-	// slice, array, or map the depth is increased by one.  When the maximum is
-	// reached, the value will be converted to a string indicating that the max
-	// depth has been exceeded.  If this field is not specified, a default
-	// value will be used.
-	MaxLogDepth int
+	// callerDepth tells formatter the number of stack-frames to skip
+	// when attributing the log line to a file and line.
+	callerDepth int
 }
 
-// MessageClass indicates which category or categories of messages to consider.
-type MessageClass int
+// messageCategory indicates which category or categories of messages to consider.
+type messageCategory int
 
 const (
-	// None ignores all message classes.
-	None MessageClass = iota
-	// All considers all message classes.
-	All
-	// Info only considers info messages.
-	Info
-	// Error only considers error messages.
-	Error
+	categoryNone messageCategory = iota
+	categoryAll
+	categoryError
+	categoryWarning
+	categoryInfo
+	categoryDebug
 )
 
-// NewFormatter constructs a Formatter which emits a JSON-like key=value format.
-func NewFormatter(opts Options) Formatter {
-	return newFormatter(opts, outputKeyValue)
-}
-
-// NewFormatterJSON constructs a Formatter which emits strict JSON.
-func NewFormatterJSON(opts Options) Formatter {
-	return newFormatter(opts, outputJSON)
-}
-
+// noValue is a placeholder for missing values.
 const noValue = "<no-value>"
 
-// Defaults for Options.
+// Defaults for fmtOptions.
 const defaultTimestampFormat = "2006-01-02 15:04:05.000000"
 const defaultMaxLogDepth = 16
 
@@ -164,47 +133,56 @@ type PseudoStruct []interface{}
 // Caller represents the original call site for a log line, after considering
 // logr.Logger.WithCallDepth and logr.Logger.WithCallStackHelper.  The File and
 // Line fields will always be provided, while the Func field is optional.
-// Users can set the render hook fields in Options to examine logged key-value
-// pairs, one of which will be {"caller", Caller} if the Options.LogCaller
-// field is enabled for the given MessageClass.
+// Users can set the render hook fields in fmtOptions to examine logged key-value
+// pairs, one of which will be {"caller", Caller} if the fmtOptions.logCaller
+// field is enabled for the given messageCategory.
 type Caller struct {
 	// File is the basename of the file for this call site.
 	File string `json:"file"`
 	// Line is the line number in the file for this call site.
 	Line int `json:"line"`
 	// Func is the function name for this call site, or empty if
-	// Options.LogCallerFunc is not enabled.
+	// fmtOptions.logCallerFunc is not enabled.
 	Func string `json:"function,omitempty"`
+}
+
+// constructs a formatter which influenced by given options.
+func newFormatter(opts fmtOptions) Formatter {
+	if opts.timestampFormat == "" {
+		opts.timestampFormat = defaultTimestampFormat
+	}
+	if opts.maxLogDepth == 0 {
+		opts.maxLogDepth = defaultMaxLogDepth
+	}
+	return Formatter{
+		prefix: "root",
+		values: nil,
+		opts:   opts,
+	}
 }
 
 // Formatter is an opaque struct which can be embedded in a LogSink
 // implementation. It should be constructed with NewFormatter. Some of
 // its methods directly implement logr.LogSink.
 type Formatter struct {
-	outputFormat outputFormat
-	prefix       string
-	values       []interface{}
-	valuesStr    string
-	depth        int
-	opts         Options
+	prefix    string
+	values    []interface{}
+	valuesStr string
+	opts      fmtOptions
 }
 
-// render produces a log line, ready to use.
+// render produces a log line.
 func (f Formatter) render(builtins, args []interface{}) []byte {
-	// Empirically bytes.Buffer is faster than strings.Builder for this.
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
-	if f.outputFormat == outputJSON {
+	if f.opts.outputFormat == outputJSON {
 		buf.WriteByte('{')
 	}
-	vals := builtins
-	if hook := f.opts.RenderBuiltinsHook; hook != nil {
-		vals = hook(f.sanitize(vals))
-	}
-	f.flatten(buf, vals, false, false) // keys are ours, no need to escape
+
+	f.flatten(buf, builtins, false, false)
 	continuing := len(builtins) > 0
 	if len(f.valuesStr) > 0 {
 		if continuing {
-			if f.outputFormat == outputJSON {
+			if f.opts.outputFormat == outputJSON {
 				buf.WriteByte(',')
 			} else {
 				buf.WriteByte(' ')
@@ -213,12 +191,9 @@ func (f Formatter) render(builtins, args []interface{}) []byte {
 		continuing = true
 		buf.WriteString(f.valuesStr)
 	}
-	vals = args
-	if hook := f.opts.RenderArgsHook; hook != nil {
-		vals = hook(f.sanitize(vals))
-	}
-	f.flatten(buf, vals, continuing, true) // escape user-provided keys
-	if f.outputFormat == outputJSON {
+
+	f.flatten(buf, args, continuing, true)
+	if f.opts.outputFormat == outputJSON {
 		buf.WriteByte('}')
 	}
 	buf.WriteByte('\n')
@@ -249,7 +224,7 @@ func (f Formatter) flatten(buf *bytes.Buffer, kvList []interface{}, continuing b
 		v := kvList[i+1]
 
 		if i > 0 || continuing {
-			if f.outputFormat == outputJSON {
+			if f.opts.outputFormat == outputJSON {
 				buf.WriteByte(',')
 			} else {
 				// In theory the format could be something we don't understand.  In
@@ -266,7 +241,7 @@ func (f Formatter) flatten(buf *bytes.Buffer, kvList []interface{}, continuing b
 			buf.WriteString(k)
 			buf.WriteByte('"')
 		}
-		if f.outputFormat == outputJSON {
+		if f.opts.outputFormat == outputJSON {
 			buf.WriteByte(':')
 		} else {
 			buf.WriteByte('=')
@@ -284,7 +259,7 @@ func (f Formatter) pretty(value interface{}) string {
 func (f Formatter) prettyWithFlags(value interface{}, flags uint32, depth int) string {
 	const flagRawStruct = 0x1 // Do not print braces on structs.
 
-	if depth > f.opts.MaxLogDepth {
+	if depth > f.opts.maxLogDepth {
 		return `"<max-log-depth-exceeded>"`
 	}
 
@@ -495,23 +470,6 @@ func (f Formatter) prettyWithFlags(value interface{}, flags uint32, depth int) s
 	return fmt.Sprintf(`"<unhandled-%s>"`, t.Kind().String())
 }
 
-func newFormatter(opts Options, outfmt outputFormat) Formatter {
-	if opts.TimestampFormat == "" {
-		opts.TimestampFormat = defaultTimestampFormat
-	}
-	if opts.MaxLogDepth == 0 {
-		opts.MaxLogDepth = defaultMaxLogDepth
-	}
-	f := Formatter{
-		outputFormat: outfmt,
-		prefix:       "root",
-		values:       nil,
-		depth:        0,
-		opts:         opts,
-	}
-	return f
-}
-
 func prettyString(s string) string {
 	// Avoid escaping (which does allocations) if we can.
 	if needsEscape(s) {
@@ -583,12 +541,12 @@ func invokeError(e error) (ret string) {
 }
 
 func (f Formatter) caller() Caller {
-	pc, file, line, ok := runtime.Caller(f.depth + 3)
+	pc, file, line, ok := runtime.Caller(f.opts.callerDepth + 2)
 	if !ok {
 		return Caller{"<unknown>", 0, ""}
 	}
 	caller := Caller{File: filepath.Base(file), Line: line}
-	if f.opts.LogCallerFunc {
+	if f.opts.logCallerFunc {
 		if fp := runtime.FuncForPC(pc); fp != nil {
 			caller.Func = fp.Name()
 		}
@@ -629,76 +587,13 @@ func (f Formatter) sanitize(kvList []interface{}) []interface{} {
 
 func (f Formatter) base(level string) []interface{} {
 	args := make([]interface{}, 0, 64) // using a constant here impacts perf
-	if f.opts.LogTimestamp {
-		args = append(args, "time", time.Now().Format(f.opts.TimestampFormat))
+	if f.opts.logTimestamp {
+		args = append(args, "time", time.Now().Format(f.opts.timestampFormat))
 	}
 	return append(args, "level", level, "logger", f.prefix)
 }
 
-// TODO: lift the code below to logger.
-
-// Init configures this Formatter from runtime info, such as the call depth
-// imposed by logr itself.
-func (f *Formatter) Init(callDepth int) {
-	f.depth += callDepth
-}
-
-// Enabled checks whether an info message at the given level should be logged.
-func (f Formatter) Enabled(level int) bool {
-	return level <= f.opts.Verbosity
-}
-
-// GetDepth returns the current depth of this Formatter.  This is useful for
-// implementations which do their own caller attribution.
-func (f Formatter) GetDepth() int {
-	return f.depth
-}
-
-// FormatInfo renders an Info log message into strings.  The prefix will be
-// empty when no names were set (via AddNames), or when the output is
-// configured for JSON.
-func (f Formatter) FormatInfo(msg string, kvList []interface{}) []byte {
-	args := f.base("info")
-	if policy := f.opts.LogCaller; policy == All || policy == Info {
-		args = append(args, "caller", f.caller())
-	}
-	args = append(args, "msg", msg)
-	return f.render(args, kvList)
-}
-
-// FormatError renders an Error log message into strings.  The prefix will be
-// empty when no names were set (via AddNames),  or when the output is
-// configured for JSON.
-func (f Formatter) FormatError(err error, msg string, kvList []interface{}) []byte {
-	args := f.base("error")
-	if policy := f.opts.LogCaller; policy == All || policy == Error {
-		args = append(args, "caller", f.caller())
-	}
-	args = append(args, "msg", msg)
-	var loggableErr interface{}
-	if err != nil {
-		loggableErr = err.Error()
-	}
-	args = append(args, "error", loggableErr)
-	return f.render(args, kvList)
-}
-
-// FormatDebug renders a Debug log message into strings.  The prefix will be
-// empty when no names were set (via AddNames), or when the output is
-// configured for JSON.
-func (f Formatter) FormatDebug(v uint, msg string, kvList []interface{}) []byte {
-	args := f.base("debug")
-	if v > 0 {
-		args = append(args, "v", v)
-	}
-	if policy := f.opts.LogCaller; policy == All || policy == Info {
-		args = append(args, "caller", f.caller())
-	}
-	args = append(args, "msg", msg)
-	return f.render(args, kvList)
-}
-
-// AddName appends the specified name.  funcr uses '/' characters to separate
+// AddName appends the specified name.  formatter uses '/' characters to separate
 // name elements.  Callers should not pass '/' in the provided name string, but
 // this library does not actually enforce that.
 func (f *Formatter) AddName(name string) {
@@ -715,19 +610,8 @@ func (f *Formatter) AddValues(kvList []interface{}) {
 	n := len(f.values)
 	f.values = append(f.values[:n:n], kvList...)
 
-	vals := f.values
-	if hook := f.opts.RenderValuesHook; hook != nil {
-		vals = hook(f.sanitize(vals))
-	}
-
-	// Pre-render values, so we don't have to do it on each Info/Error call.
+	// Pre-render values, so we don't have to do it on each call.
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
-	f.flatten(buf, vals, false, true) // escape user-provided keys
+	f.flatten(buf, f.values, false, true) // escape user-provided keys
 	f.valuesStr = buf.String()
-}
-
-// AddCallDepth increases the number of stack-frames to skip when attributing
-// the log line to a file and line.
-func (f *Formatter) AddCallDepth(depth int) {
-	f.depth += depth
 }

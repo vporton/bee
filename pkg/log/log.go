@@ -9,12 +9,10 @@ import (
 	"io"
 	"strconv"
 	"sync/atomic"
-
-	"github.com/ethersphere/bee/pkg/log/internal"
 )
 
 // TODO: document interfaces!
-
+// TODO: use generics to alternate type on builder methods from Logger to Verbose to allow only the relevant methods on: logger.V(1).WithName("some_name").
 type builder interface {
 	WithName(name string) Logger
 	WithValues(keysAndValues ...interface{}) Logger
@@ -38,13 +36,7 @@ type Logger interface {
 	Error(err error, msg string, keysAndValues ...interface{})
 }
 
-// Marshaler is an optional interface that logged values may choose to
-// implement. Loggers with structured output, such as JSON, should
-// log the object return by the MarshalLog method instead of the
-// original value.
-type Marshaler = internal.Marshaler
-
-// Level specifies a level of verbosity for V logs.
+// Level specifies a level of verbosity for logger.
 // Level should be modified only through its set method.
 // Level is treated as a sync/atomic int32.
 type Level int32
@@ -54,49 +46,74 @@ func (l *Level) get() Level {
 	return Level(atomic.LoadInt32((*int32)(l)))
 }
 
-// set sets the value of the Level.
-func (l *Level) set(val Level) {
-	atomic.StoreInt32((*int32)(l), int32(val))
-}
-
-// add adds value to this Level and returns the new value.
-func (l *Level) add(val Level) Level {
-	return Level(atomic.AddInt32((*int32)(l), int32(val.get())))
+// set updates the value of the Level.
+func (l *Level) set(v Level) {
+	atomic.StoreInt32((*int32)(l), int32(v))
 }
 
 // String implements the fmt.Stringer interface.
 func (l *Level) String() string { return strconv.FormatInt(int64(*l), 10) }
 
 const (
-	Off = Level(iota - 4)
-	Error
-	Warning
-	Info
-	Debug
+	VerbosityAll  = Level(1<<31 - 1)
+	VerbosityNone = Level(iota - 4)
+	VerbosityError
+	VerbosityWarning
+	VerbosityInfo
+	VerbosityDebug
 )
 
-// Logger provides the basic logger functionality.
-type basicLogger struct {
-	sink      io.Writer
-	debugL    uint
-	verbosity Level
-	formatter internal.Formatter
+// newBasicLogger is a convenient constructor for basicLogger.
+func newBasicLogger(fmt Formatter, sink io.Writer, verbosity Level) *basicLogger {
+	return &basicLogger{
+		fmt:       fmt,
+		sink:      sink,
+		verbosity: verbosity,
+	}
 }
 
+// basicLogger provides the basic logger functionality.
+type basicLogger struct {
+	// fmt formats logger messages before they are written to the sink.
+	fmt Formatter
+	// sink represents the stream where the logs are written.
+	sink io.Writer
+	// debugL represents the verbosity V level for the debug calls.
+	// Higher values enable more logs. Debug logs at or below this level
+	// will be written, while logs above this level will be discarded.
+	debugL uint
+	// verbosity represents the current verbosity level.
+	// This variable is used to change the verbosity of the logger instance.
+	verbosity Level
+}
+
+// clone returns a clone the basicLogger.
 func (l *basicLogger) clone() *basicLogger {
 	c := *l
 	return &c
 }
 
-// Enabled tests whether this Logger is enabled.  For example, commandline
-// flags might be used to set the logging verbosity and disable some info logs.
+// setVerbosity changes the verbosity level or the logger.
+func (l *basicLogger) setVerbosity(v Level) {
+	l.verbosity.set(v)
+}
+
+// Enabled tests whether this Logger is enabled.
 func (l *basicLogger) Enabled() bool {
-	return l.verbosity < Off
+	return l.verbosity.get() > VerbosityNone
 }
 
 func (l *basicLogger) Debug(msg string, keysAndValues ...interface{}) { // 0
 	if int(l.verbosity.get()) >= int(l.debugL) {
-		buf := l.formatter.FormatDebug(l.debugL, msg, keysAndValues)
+		args := l.fmt.base("debug")
+		if l.debugL > 0 {
+			args = append(args, "v", l.debugL)
+		}
+		if policy := l.fmt.opts.logCaller; policy == categoryAll || policy == categoryDebug {
+			args = append(args, "caller", l.fmt.caller())
+		}
+		args = append(args, "msg", msg)
+		buf := l.fmt.render(args, keysAndValues)
 		if _, err := l.sink.Write(buf); err != nil {
 			fmt.Printf("log.Debug: unable to write buffer: %s\n", buf)
 		}
@@ -110,23 +127,32 @@ func (l *basicLogger) Debug(msg string, keysAndValues ...interface{}) { // 0
 // information.  The key/value pairs must alternate string keys and arbitrary
 // values.
 func (l *basicLogger) Info(msg string, keysAndValues ...interface{}) { // -1
-	if l.verbosity >= Info {
-		buf := l.formatter.FormatInfo(msg, keysAndValues)
+	if l.verbosity.get() >= VerbosityInfo {
+		args := l.fmt.base("info")
+		if policy := l.fmt.opts.logCaller; policy == categoryAll || policy == categoryInfo {
+			args = append(args, "caller", l.fmt.caller())
+		}
+		args = append(args, "msg", msg)
+		buf := l.fmt.render(args, keysAndValues)
 		if _, err := l.sink.Write(buf); err != nil {
 			fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
 		}
 	}
 }
 
-// TODO:
 func (l *basicLogger) Warning(msg string, keysAndValues ...interface{}) { // -2
-	if l.verbosity >= Warning {
-		buf := l.formatter.FormatInfo(msg, keysAndValues)
+	if l.verbosity.get() >= VerbosityWarning {
+		args := l.fmt.base("warning")
+		if policy := l.fmt.opts.logCaller; policy == categoryAll || policy == categoryWarning {
+			args = append(args, "caller", l.fmt.caller())
+		}
+		args = append(args, "msg", msg)
+		buf := l.fmt.render(args, keysAndValues)
 		if _, err := l.sink.Write(buf); err != nil {
 			fmt.Printf("log.Warning: unable to write buffer: %s\n", buf)
 		}
 	}
-	//buf := l.formatter.FormatInfo(msg, keysAndValues)
+	//buf := l.fmt.FormatInfo(msg, keysAndValues)
 	//if _, err := l.sink.Write(buf); err != nil {
 	//	fmt.Printf("log.Info: unable to write buffer: %s\n", buf)
 	//}
@@ -142,9 +168,19 @@ func (l *basicLogger) Warning(msg string, keysAndValues ...interface{}) { // -2
 // while the err argument should be used to attach the actual error that
 // triggered this log line, if present. The err parameter is optional
 // and nil may be passed instead of an error instance.
-func (l *basicLogger) Error(err error, msg string, keysAndValues ...interface{}) { // -3
-	if l.verbosity >= Error {
-		buf := l.formatter.FormatError(err, msg, keysAndValues)
+func (l *basicLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+	if l.verbosity.get() >= VerbosityError {
+		args := l.fmt.base("error")
+		if policy := l.fmt.opts.logCaller; policy == categoryAll || policy == categoryError {
+			args = append(args, "caller", l.fmt.caller())
+		}
+		args = append(args, "msg", msg)
+		var loggableErr interface{}
+		if err != nil {
+			loggableErr = err.Error()
+		}
+		args = append(args, "error", loggableErr)
+		buf := l.fmt.render(args, keysAndValues)
 		if _, err := l.sink.Write(buf); err != nil {
 			fmt.Printf("log.Error: unable to write buffer: %s\n", buf)
 		}
@@ -165,7 +201,7 @@ func (l *basicLogger) V(level uint) Verbose {
 // See Info for documentation on how key/value pairs work.
 func (l *basicLogger) WithValues(keysAndValues ...interface{}) Logger {
 	c := l.clone()
-	c.formatter.AddValues(keysAndValues)
+	c.fmt.AddValues(keysAndValues)
 	return c
 }
 
@@ -176,6 +212,6 @@ func (l *basicLogger) WithValues(keysAndValues ...interface{}) Logger {
 // more information).
 func (l *basicLogger) WithName(name string) Logger {
 	c := l.clone()
-	c.formatter.AddName(name)
+	c.fmt.AddName(name)
 	return c
 }
