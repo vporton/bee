@@ -1,35 +1,9 @@
-//Copyright 2021 The logr Authors.
-//
-//Licensed under the Apache License, Version 2.0 (the "License");
-//you may not use this file except in compliance with the License.
-//You may obtain a copy of the License at
-//
-//    http://www.apache.org/licenses/LICENSE-2.0
-//
-//Unless required by applicable law or agreed to in writing, software
-//distributed under the License is distributed on an "AS IS" BASIS,
-//WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//See the License for the specific language governing permissions and
-//limitations under the License.
+// Copyright 2022 The Swarm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
-// Package log implements formatting of structured log messages and
-// optionally captures the call site and timestamp.
-//
-// The simplest way to use it is via its implementation of a
-// github.com/go-logr/logr.LogSink with output through an arbitrary
-// "write" function.  See New and NewJSON for details.
-//
-// Custom LogSinks
-//
-// For users who need more control, a formatter.Formatter can be embedded inside
-// your own custom LogSink implementation. This is useful when the LogSink
-// needs to implement additional methods, for example.
-//
-// Formatting
-//
-// This will respect logr.Marshaler, fmt.Stringer, and error interfaces for
-// values which are being logged.  When rendering a struct, formatter will use Go's
-// standard JSON tags (all except "string").
+// Note: the following code is derived (borrows) from: github.com/go-logr/logr
+
 package log
 
 import (
@@ -166,7 +140,7 @@ func newFormatter(opts fmtOptions) Formatter {
 // its methods directly implement logr.LogSink.
 type Formatter struct {
 	prefix    string
-	values    []interface{}
+	values    []interface{} // TODO: do deep copy on log clone!?
 	valuesStr string
 	opts      fmtOptions
 }

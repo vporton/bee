@@ -7,16 +7,7 @@ package log
 import (
 	"os"
 	"sync"
-
-	"github.com/go-logr/zerologr"
-	"github.com/rs/zerolog"
 )
-
-func init() {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
-	zerologr.NameFieldName = "logger"
-	zerologr.NameSeparator = "/"
-}
 
 // registry is the central register for Logger instances.
 var registry = struct {
@@ -37,6 +28,17 @@ func NewLogger(name string) *basicLogger {
 	if ok {
 		return logger
 	}
+
+	// TODO:
+	// - Cleanup log.go and formatter.go files; with all todos
+	// - Establish global vars for modifying instances behaviour on creation (guard them with sync.Once)
+	// - Implement the global log registry with ability to change verbosity of separate loggers
+	// - Write example file
+	// - Write short demonstration program with several goroutines
+	// - Add V-level tests
+	// - Write doc.go
+	// - Write benchmarks
+	// - Do optimizations
 
 	// Flat hierarchy with tree-emulated hierarchy using string: "root", "root/child1", etc...
 

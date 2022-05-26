@@ -1,16 +1,8 @@
-//Copyright 2021 The logr Authors.
-//
-//Licensed under the Apache License, Version 2.0 (the "License");
-//you may not use this file except in compliance with the License.
-//You may obtain a copy of the License at
-//
-//    http://www.apache.org/licenses/LICENSE-2.0
-//
-//Unless required by applicable law or agreed to in writing, software
-//distributed under the License is distributed on an "AS IS" BASIS,
-//WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//See the License for the specific language governing permissions and
-//limitations under the License.
+// Copyright 2022 The Swarm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Note: the following code is derived (borrows) from: github.com/go-logr/logr
 
 package log
 
@@ -18,24 +10,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"path/filepath"
-	"reflect"
-	"runtime"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-// Will be handled via reflection instead of type assertions.
+// substr is handled via reflection instead of type assertions.
 type substr string
 
-func ptrint(i int) *int {
-	return &i
-}
-func ptrstr(s string) *string {
-	return &s
-}
-
-// point implements encoding.TextMarshaler and can be used as a map key.
+// point implements encoding.TextMarshaller and can be used as a map key.
 type point struct{ x, y int }
 
 func (p point) MarshalText() ([]byte, error) {
@@ -49,194 +32,189 @@ func (p pointErr) MarshalText() ([]byte, error) {
 	return nil, fmt.Errorf("uh oh: %d, %d", p.x, p.y)
 }
 
-// Logging this should result in the MarshalLog() value.
-type Tmarshaler struct{ val string }
+// marshalerTest expect to result in the MarshalLog() value when logged.
+type marshalerTest struct{ val string }
 
-func (t Tmarshaler) MarshalLog() interface{} {
-	return struct{ Inner string }{"I am a logr.Marshaler"}
+func (_ marshalerTest) MarshalLog() interface{} {
+	return struct{ Inner string }{"I am a log.Marshaler"}
 }
-
-func (t Tmarshaler) String() string {
+func (_ marshalerTest) String() string {
 	return "String(): you should not see this"
 }
-
-func (t Tmarshaler) Error() string {
+func (_ marshalerTest) Error() string {
 	return "Error(): you should not see this"
 }
 
-// Logging this should result in a panic.
-type Tmarshalerpanic struct{ val string }
+// marshalerPanicTest expect this to result in a panic when logged.
+type marshalerPanicTest struct{ val string }
 
-func (t Tmarshalerpanic) MarshalLog() interface{} {
-	panic("Tmarshalerpanic")
+func (_ marshalerPanicTest) MarshalLog() interface{} {
+	panic("marshalerPanicTest")
 }
 
-// Logging this should result in the String() value.
-type Tstringer struct{ val string }
+// stringerTest expect this to result in the String() value when logged.
+type stringerTest struct{ val string }
 
-func (t Tstringer) String() string {
+func (_ stringerTest) String() string {
 	return "I am a fmt.Stringer"
 }
-
-func (t Tstringer) Error() string {
+func (_ stringerTest) Error() string {
 	return "Error(): you should not see this"
 }
 
-// Logging this should result in a panic.
-type Tstringerpanic struct{ val string }
+// stringerPanicTest expect this to result in a panic when logged.
+type stringerPanicTest struct{ val string }
 
-func (t Tstringerpanic) String() string {
-	panic("Tstringerpanic")
+func (_ stringerPanicTest) String() string {
+	panic("stringerPanicTest")
 }
 
-// Logging this should result in the Error() value.
-type Terror struct{ val string }
+// errorTest expect this to result in the Error() value when logged.
+type errorTest struct{ val string }
 
-func (t Terror) Error() string {
+func (_ errorTest) Error() string {
 	return "I am an error"
 }
 
-// Logging this should result in a panic.
-type Terrorpanic struct{ val string }
+// errorPanicTest expect this to result in a panic when logged.
+type errorPanicTest struct{ val string }
 
-func (t Terrorpanic) Error() string {
-	panic("Terrorpanic")
+func (_ errorPanicTest) Error() string {
+	panic("errorPanicTest")
 }
 
-type TjsontagsString struct {
-	String1 string `json:"string1"`           // renamed
-	String2 string `json:"-"`                 // ignored
-	String3 string `json:"-,"`                // named "-"
-	String4 string `json:"string4,omitempty"` // renamed, ignore if empty
-	String5 string `json:","`                 // no-op
-	String6 string `json:",omitempty"`        // ignore if empty
-}
-
-type TjsontagsBool struct {
-	Bool1 bool `json:"bool1"`           // renamed
-	Bool2 bool `json:"-"`               // ignored
-	Bool3 bool `json:"-,"`              // named "-"
-	Bool4 bool `json:"bool4,omitempty"` // renamed, ignore if empty
-	Bool5 bool `json:","`               // no-op
-	Bool6 bool `json:",omitempty"`      // ignore if empty
-}
-
-type TjsontagsInt struct {
-	Int1 int `json:"int1"`           // renamed
-	Int2 int `json:"-"`              // ignored
-	Int3 int `json:"-,"`             // named "-"
-	Int4 int `json:"int4,omitempty"` // renamed, ignore if empty
-	Int5 int `json:","`              // no-op
-	Int6 int `json:",omitempty"`     // ignore if empty
-}
-
-type TjsontagsUint struct {
-	Uint1 uint `json:"uint1"`           // renamed
-	Uint2 uint `json:"-"`               // ignored
-	Uint3 uint `json:"-,"`              // named "-"
-	Uint4 uint `json:"uint4,omitempty"` // renamed, ignore if empty
-	Uint5 uint `json:","`               // no-op
-	Uint6 uint `json:",omitempty"`      // ignore if empty
-}
-
-type TjsontagsFloat struct {
-	Float1 float64 `json:"float1"`           // renamed
-	Float2 float64 `json:"-"`                // ignored
-	Float3 float64 `json:"-,"`               // named "-"
-	Float4 float64 `json:"float4,omitempty"` // renamed, ignore if empty
-	Float5 float64 `json:","`                // no-op
-	Float6 float64 `json:",omitempty"`       // ignore if empty
-}
-
-type TjsontagsComplex struct {
-	Complex1 complex128 `json:"complex1"`           // renamed
-	Complex2 complex128 `json:"-"`                  // ignored
-	Complex3 complex128 `json:"-,"`                 // named "-"
-	Complex4 complex128 `json:"complex4,omitempty"` // renamed, ignore if empty
-	Complex5 complex128 `json:","`                  // no-op
-	Complex6 complex128 `json:",omitempty"`         // ignore if empty
-}
-
-type TjsontagsPtr struct {
-	Ptr1 *string `json:"ptr1"`           // renamed
-	Ptr2 *string `json:"-"`              // ignored
-	Ptr3 *string `json:"-,"`             // named "-"
-	Ptr4 *string `json:"ptr4,omitempty"` // renamed, ignore if empty
-	Ptr5 *string `json:","`              // no-op
-	Ptr6 *string `json:",omitempty"`     // ignore if empty
-}
-
-type TjsontagsArray struct {
-	Array1 [2]string `json:"array1"`           // renamed
-	Array2 [2]string `json:"-"`                // ignored
-	Array3 [2]string `json:"-,"`               // named "-"
-	Array4 [2]string `json:"array4,omitempty"` // renamed, ignore if empty
-	Array5 [2]string `json:","`                // no-op
-	Array6 [2]string `json:",omitempty"`       // ignore if empty
-}
-
-type TjsontagsSlice struct {
-	Slice1 []string `json:"slice1"`           // renamed
-	Slice2 []string `json:"-"`                // ignored
-	Slice3 []string `json:"-,"`               // named "-"
-	Slice4 []string `json:"slice4,omitempty"` // renamed, ignore if empty
-	Slice5 []string `json:","`                // no-op
-	Slice6 []string `json:",omitempty"`       // ignore if empty
-}
-
-type TjsontagsMap struct {
-	Map1 map[string]string `json:"map1"`           // renamed
-	Map2 map[string]string `json:"-"`              // ignored
-	Map3 map[string]string `json:"-,"`             // named "-"
-	Map4 map[string]string `json:"map4,omitempty"` // renamed, ignore if empty
-	Map5 map[string]string `json:","`              // no-op
-	Map6 map[string]string `json:",omitempty"`     // ignore if empty
-}
-
-type Tinnerstruct struct {
-	Inner string
-}
-type Tinnerint int
-type Tinnermap map[string]string
-type Tinnerslice []string
-
-type Tembedstruct struct {
-	Tinnerstruct
-	Outer string
-}
-
-type Tembednonstruct struct {
-	Tinnerint
-	Tinnermap
-	Tinnerslice
-}
-
-type Tinner1 Tinnerstruct
-type Tinner2 Tinnerstruct
-type Tinner3 Tinnerstruct
-type Tinner4 Tinnerstruct
-type Tinner5 Tinnerstruct
-type Tinner6 Tinnerstruct
-
-type Tembedjsontags struct {
-	Outer   string
-	Tinner1 `json:"inner1"`
-	Tinner2 `json:"-"`
-	Tinner3 `json:"-,"`
-	Tinner4 `json:"inner4,omitempty"`
-	Tinner5 `json:","`
-	Tinner6 `json:"inner6,omitempty"`
-}
-
-func TestPretty(t *testing.T) {
-	// used below
-	newStr := func(s string) *string {
-		return &s
+type (
+	jsonTagsStringTest struct {
+		String1 string `json:"string1"`           // renamed
+		String2 string `json:"-"`                 // ignored
+		String3 string `json:"-,"`                // named "-"
+		String4 string `json:"string4,omitempty"` // renamed, ignore if empty
+		String5 string `json:","`                 // no-op
+		String6 string `json:",omitempty"`        // ignore if empty
 	}
 
-	cases := []struct {
+	jsonTagsBoolTest struct {
+		Bool1 bool `json:"bool1"`           // renamed
+		Bool2 bool `json:"-"`               // ignored
+		Bool3 bool `json:"-,"`              // named "-"
+		Bool4 bool `json:"bool4,omitempty"` // renamed, ignore if empty
+		Bool5 bool `json:","`               // no-op
+		Bool6 bool `json:",omitempty"`      // ignore if empty
+	}
+
+	jsonTagsIntTest struct {
+		Int1 int `json:"int1"`           // renamed
+		Int2 int `json:"-"`              // ignored
+		Int3 int `json:"-,"`             // named "-"
+		Int4 int `json:"int4,omitempty"` // renamed, ignore if empty
+		Int5 int `json:","`              // no-op
+		Int6 int `json:",omitempty"`     // ignore if empty
+	}
+
+	jsonTagsUintTest struct {
+		Uint1 uint `json:"uint1"`           // renamed
+		Uint2 uint `json:"-"`               // ignored
+		Uint3 uint `json:"-,"`              // named "-"
+		Uint4 uint `json:"uint4,omitempty"` // renamed, ignore if empty
+		Uint5 uint `json:","`               // no-op
+		Uint6 uint `json:",omitempty"`      // ignore if empty
+	}
+
+	jsonTagsFloatTest struct {
+		Float1 float64 `json:"float1"`           // renamed
+		Float2 float64 `json:"-"`                // ignored
+		Float3 float64 `json:"-,"`               // named "-"
+		Float4 float64 `json:"float4,omitempty"` // renamed, ignore if empty
+		Float5 float64 `json:","`                // no-op
+		Float6 float64 `json:",omitempty"`       // ignore if empty
+	}
+
+	jsonTagsComplexTest struct {
+		Complex1 complex128 `json:"complex1"`           // renamed
+		Complex2 complex128 `json:"-"`                  // ignored
+		Complex3 complex128 `json:"-,"`                 // named "-"
+		Complex4 complex128 `json:"complex4,omitempty"` // renamed, ignore if empty
+		Complex5 complex128 `json:","`                  // no-op
+		Complex6 complex128 `json:",omitempty"`         // ignore if empty
+	}
+
+	jsonTagsPtrTest struct {
+		Ptr1 *string `json:"ptr1"`           // renamed
+		Ptr2 *string `json:"-"`              // ignored
+		Ptr3 *string `json:"-,"`             // named "-"
+		Ptr4 *string `json:"ptr4,omitempty"` // renamed, ignore if empty
+		Ptr5 *string `json:","`              // no-op
+		Ptr6 *string `json:",omitempty"`     // ignore if empty
+	}
+
+	jsonTagsArrayTest struct {
+		Array1 [2]string `json:"array1"`           // renamed
+		Array2 [2]string `json:"-"`                // ignored
+		Array3 [2]string `json:"-,"`               // named "-"
+		Array4 [2]string `json:"array4,omitempty"` // renamed, ignore if empty
+		Array5 [2]string `json:","`                // no-op
+		Array6 [2]string `json:",omitempty"`       // ignore if empty
+	}
+
+	jsonTagsSliceTest struct {
+		Slice1 []string `json:"slice1"`           // renamed
+		Slice2 []string `json:"-"`                // ignored
+		Slice3 []string `json:"-,"`               // named "-"
+		Slice4 []string `json:"slice4,omitempty"` // renamed, ignore if empty
+		Slice5 []string `json:","`                // no-op
+		Slice6 []string `json:",omitempty"`       // ignore if empty
+	}
+
+	jsonTagsMapTest struct {
+		Map1 map[string]string `json:"map1"`           // renamed
+		Map2 map[string]string `json:"-"`              // ignored
+		Map3 map[string]string `json:"-,"`             // named "-"
+		Map4 map[string]string `json:"map4,omitempty"` // renamed, ignore if empty
+		Map5 map[string]string `json:","`              // no-op
+		Map6 map[string]string `json:",omitempty"`     // ignore if empty
+	}
+
+	InnerStructTest struct{ Inner string }
+	InnerIntTest    int
+	InnerMapTest    map[string]string
+	InnerSliceTest  []string
+
+	embedStructTest struct {
+		InnerStructTest
+		Outer string
+	}
+
+	embedNonStructTest struct {
+		InnerIntTest
+		InnerMapTest
+		InnerSliceTest
+	}
+
+	Inner1Test InnerStructTest
+	Inner2Test InnerStructTest
+	Inner3Test InnerStructTest
+	Inner4Test InnerStructTest
+	Inner5Test InnerStructTest
+	Inner6Test InnerStructTest
+
+	embedJSONTagsTest struct {
+		Outer      string
+		Inner1Test `json:"inner1"`
+		Inner2Test `json:"-"`
+		Inner3Test `json:"-,"`
+		Inner4Test `json:"inner4,omitempty"`
+		Inner5Test `json:","`
+		Inner6Test `json:"inner6,omitempty"`
+	}
+)
+
+func TestPretty(t *testing.T) {
+	intPtr := func(i int) *int { return &i }
+	strPtr := func(s string) *string { return &s }
+
+	testCases := []struct {
 		val interface{}
-		exp string // used in cases where JSON can't handle it
+		exp string // used in testCases where JSON can't handle it
 	}{{
 		val: "strval",
 	}, {
@@ -292,9 +270,9 @@ func TestPretty(t *testing.T) {
 		val: complex128(93i),
 		exp: `"(0+93i)"`,
 	}, {
-		val: ptrint(93),
+		val: intPtr(93),
 	}, {
-		val: ptrstr("pstrval"),
+		val: strPtr("pstrval"),
 	}, {
 		val: []int{},
 	}, {
@@ -389,47 +367,47 @@ func TestPretty(t *testing.T) {
 			C interface{}
 			D interface{}
 		}{
-			B: ptrint(1),
+			B: intPtr(1),
 			D: interface{}(2),
 		},
 	}, {
-		val: Tmarshaler{"foobar"},
-		exp: `{"Inner":"I am a logr.Marshaler"}`,
+		val: marshalerTest{"foobar"},
+		exp: `{"Inner":"I am a log.Marshaler"}`,
 	}, {
-		val: &Tmarshaler{"foobar"},
-		exp: `{"Inner":"I am a logr.Marshaler"}`,
+		val: &marshalerTest{"foobar"},
+		exp: `{"Inner":"I am a log.Marshaler"}`,
 	}, {
-		val: (*Tmarshaler)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Tmarshaler.MarshalLog called using nil *Tmarshaler pointer>"`,
+		val: (*marshalerTest)(nil),
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.marshalerTest.MarshalLog called using nil *marshalerTest pointer>"`,
 	}, {
-		val: Tmarshalerpanic{"foobar"},
-		exp: `"<panic: Tmarshalerpanic>"`,
+		val: marshalerPanicTest{"foobar"},
+		exp: `"<panic: marshalerPanicTest>"`,
 	}, {
-		val: Tstringer{"foobar"},
+		val: stringerTest{"foobar"},
 		exp: `"I am a fmt.Stringer"`,
 	}, {
-		val: &Tstringer{"foobar"},
+		val: &stringerTest{"foobar"},
 		exp: `"I am a fmt.Stringer"`,
 	}, {
-		val: (*Tstringer)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Tstringer.String called using nil *Tstringer pointer>"`,
+		val: (*stringerTest)(nil),
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.stringerTest.String called using nil *stringerTest pointer>"`,
 	}, {
-		val: Tstringerpanic{"foobar"},
-		exp: `"<panic: Tstringerpanic>"`,
+		val: stringerPanicTest{"foobar"},
+		exp: `"<panic: stringerPanicTest>"`,
 	}, {
-		val: Terror{"foobar"},
+		val: errorTest{"foobar"},
 		exp: `"I am an error"`,
 	}, {
-		val: &Terror{"foobar"},
+		val: &errorTest{"foobar"},
 		exp: `"I am an error"`,
 	}, {
-		val: (*Terror)(nil),
-		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.Terror.Error called using nil *Terror pointer>"`,
+		val: (*errorTest)(nil),
+		exp: `"<panic: value method github.com/ethersphere/bee/pkg/log.errorTest.Error called using nil *errorTest pointer>"`,
 	}, {
-		val: Terrorpanic{"foobar"},
-		exp: `"<panic: Terrorpanic>"`,
+		val: errorPanicTest{"foobar"},
+		exp: `"<panic: errorPanicTest>"`,
 	}, {
-		val: TjsontagsString{
+		val: jsonTagsStringTest{
 			String1: "v1",
 			String2: "v2",
 			String3: "v3",
@@ -438,9 +416,9 @@ func TestPretty(t *testing.T) {
 			String6: "v6",
 		},
 	}, {
-		val: TjsontagsString{},
+		val: jsonTagsStringTest{},
 	}, {
-		val: TjsontagsBool{
+		val: jsonTagsBoolTest{
 			Bool1: true,
 			Bool2: true,
 			Bool3: true,
@@ -449,9 +427,9 @@ func TestPretty(t *testing.T) {
 			Bool6: true,
 		},
 	}, {
-		val: TjsontagsBool{},
+		val: jsonTagsBoolTest{},
 	}, {
-		val: TjsontagsInt{
+		val: jsonTagsIntTest{
 			Int1: 1,
 			Int2: 2,
 			Int3: 3,
@@ -460,9 +438,9 @@ func TestPretty(t *testing.T) {
 			Int6: 6,
 		},
 	}, {
-		val: TjsontagsInt{},
+		val: jsonTagsIntTest{},
 	}, {
-		val: TjsontagsUint{
+		val: jsonTagsUintTest{
 			Uint1: 1,
 			Uint2: 2,
 			Uint3: 3,
@@ -471,9 +449,9 @@ func TestPretty(t *testing.T) {
 			Uint6: 6,
 		},
 	}, {
-		val: TjsontagsUint{},
+		val: jsonTagsUintTest{},
 	}, {
-		val: TjsontagsFloat{
+		val: jsonTagsFloatTest{
 			Float1: 1.1,
 			Float2: 2.2,
 			Float3: 3.3,
@@ -482,9 +460,9 @@ func TestPretty(t *testing.T) {
 			Float6: 6.6,
 		},
 	}, {
-		val: TjsontagsFloat{},
+		val: jsonTagsFloatTest{},
 	}, {
-		val: TjsontagsComplex{
+		val: jsonTagsComplexTest{
 			Complex1: 1i,
 			Complex2: 2i,
 			Complex3: 3i,
@@ -494,21 +472,21 @@ func TestPretty(t *testing.T) {
 		},
 		exp: `{"complex1":"(0+1i)","-":"(0+3i)","complex4":"(0+4i)","Complex5":"(0+5i)","Complex6":"(0+6i)"}`,
 	}, {
-		val: TjsontagsComplex{},
+		val: jsonTagsComplexTest{},
 		exp: `{"complex1":"(0+0i)","-":"(0+0i)","Complex5":"(0+0i)"}`,
 	}, {
-		val: TjsontagsPtr{
-			Ptr1: newStr("1"),
-			Ptr2: newStr("2"),
-			Ptr3: newStr("3"),
-			Ptr4: newStr("4"),
-			Ptr5: newStr("5"),
-			Ptr6: newStr("6"),
+		val: jsonTagsPtrTest{
+			Ptr1: strPtr("1"),
+			Ptr2: strPtr("2"),
+			Ptr3: strPtr("3"),
+			Ptr4: strPtr("4"),
+			Ptr5: strPtr("5"),
+			Ptr6: strPtr("6"),
 		},
 	}, {
-		val: TjsontagsPtr{},
+		val: jsonTagsPtrTest{},
 	}, {
-		val: TjsontagsArray{
+		val: jsonTagsArrayTest{
 			Array1: [2]string{"v1", "v1"},
 			Array2: [2]string{"v2", "v2"},
 			Array3: [2]string{"v3", "v3"},
@@ -517,9 +495,9 @@ func TestPretty(t *testing.T) {
 			Array6: [2]string{"v6", "v6"},
 		},
 	}, {
-		val: TjsontagsArray{},
+		val: jsonTagsArrayTest{},
 	}, {
-		val: TjsontagsSlice{
+		val: jsonTagsSliceTest{
 			Slice1: []string{"v1", "v1"},
 			Slice2: []string{"v2", "v2"},
 			Slice3: []string{"v3", "v3"},
@@ -528,10 +506,10 @@ func TestPretty(t *testing.T) {
 			Slice6: []string{"v6", "v6"},
 		},
 	}, {
-		val: TjsontagsSlice{},
+		val: jsonTagsSliceTest{},
 		exp: `{"slice1":[],"-":[],"Slice5":[]}`,
 	}, {
-		val: TjsontagsMap{
+		val: jsonTagsMapTest{
 			Map1: map[string]string{"k1": "v1"},
 			Map2: map[string]string{"k2": "v2"},
 			Map3: map[string]string{"k3": "v3"},
@@ -540,25 +518,25 @@ func TestPretty(t *testing.T) {
 			Map6: map[string]string{"k6": "v6"},
 		},
 	}, {
-		val: TjsontagsMap{},
+		val: jsonTagsMapTest{},
 		exp: `{"map1":{},"-":{},"Map5":{}}`,
 	}, {
-		val: Tembedstruct{},
+		val: embedStructTest{},
 	}, {
-		val: Tembednonstruct{},
-		exp: `{"Tinnerint":0,"Tinnermap":{},"Tinnerslice":[]}`,
+		val: embedNonStructTest{},
+		exp: `{"InnerIntTest":0,"InnerMapTest":{},"InnerSliceTest":[]}`,
 	}, {
-		val: Tembedjsontags{},
+		val: embedJSONTagsTest{},
 	}, {
 		val: PseudoStruct(makeKV("f1", 1, "f2", true, "f3", []int{})),
 		exp: `{"f1":1,"f2":true,"f3":[]}`,
 	}, {
-		val: map[TjsontagsString]int{
+		val: map[jsonTagsStringTest]int{
 			{String1: `"quoted"`, String4: `unquoted`}: 1,
 		},
 		exp: `{"{\"string1\":\"\\\"quoted\\\"\",\"-\":\"\",\"string4\":\"unquoted\",\"String5\":\"\"}":1}`,
 	}, {
-		val: map[TjsontagsInt]int{
+		val: map[jsonTagsIntTest]int{
 			{Int1: 1, Int2: 2}: 3,
 		},
 		exp: `{"{\"int1\":1,\"-\":0,\"Int5\":0}":3}`,
@@ -568,21 +546,21 @@ func TestPretty(t *testing.T) {
 		},
 		exp: `{"[{\"S\":\"\\\"quoted\\\"\"},{\"S\":\"unquoted\"}]":1}`,
 	}, {
-		val: TjsontagsComplex{},
+		val: jsonTagsComplexTest{},
 		exp: `{"complex1":"(0+0i)","-":"(0+0i)","Complex5":"(0+0i)"}`,
 	}, {
-		val: TjsontagsPtr{
-			Ptr1: newStr("1"),
-			Ptr2: newStr("2"),
-			Ptr3: newStr("3"),
-			Ptr4: newStr("4"),
-			Ptr5: newStr("5"),
-			Ptr6: newStr("6"),
+		val: jsonTagsPtrTest{
+			Ptr1: strPtr("1"),
+			Ptr2: strPtr("2"),
+			Ptr3: strPtr("3"),
+			Ptr4: strPtr("4"),
+			Ptr5: strPtr("5"),
+			Ptr6: strPtr("6"),
 		},
 	}, {
-		val: TjsontagsPtr{},
+		val: jsonTagsPtrTest{},
 	}, {
-		val: TjsontagsArray{
+		val: jsonTagsArrayTest{
 			Array1: [2]string{"v1", "v1"},
 			Array2: [2]string{"v2", "v2"},
 			Array3: [2]string{"v3", "v3"},
@@ -591,9 +569,9 @@ func TestPretty(t *testing.T) {
 			Array6: [2]string{"v6", "v6"},
 		},
 	}, {
-		val: TjsontagsArray{},
+		val: jsonTagsArrayTest{},
 	}, {
-		val: TjsontagsSlice{
+		val: jsonTagsSliceTest{
 			Slice1: []string{"v1", "v1"},
 			Slice2: []string{"v2", "v2"},
 			Slice3: []string{"v3", "v3"},
@@ -602,10 +580,10 @@ func TestPretty(t *testing.T) {
 			Slice6: []string{"v6", "v6"},
 		},
 	}, {
-		val: TjsontagsSlice{},
+		val: jsonTagsSliceTest{},
 		exp: `{"slice1":[],"-":[],"Slice5":[]}`,
 	}, {
-		val: TjsontagsMap{
+		val: jsonTagsMapTest{
 			Map1: map[string]string{"k1": "v1"},
 			Map2: map[string]string{"k2": "v2"},
 			Map3: map[string]string{"k3": "v3"},
@@ -614,25 +592,25 @@ func TestPretty(t *testing.T) {
 			Map6: map[string]string{"k6": "v6"},
 		},
 	}, {
-		val: TjsontagsMap{},
+		val: jsonTagsMapTest{},
 		exp: `{"map1":{},"-":{},"Map5":{}}`,
 	}, {
-		val: Tembedstruct{},
+		val: embedStructTest{},
 	}, {
-		val: Tembednonstruct{},
-		exp: `{"Tinnerint":0,"Tinnermap":{},"Tinnerslice":[]}`,
+		val: embedNonStructTest{},
+		exp: `{"InnerIntTest":0,"InnerMapTest":{},"InnerSliceTest":[]}`,
 	}, {
-		val: Tembedjsontags{},
+		val: embedJSONTagsTest{},
 	}, {
 		val: PseudoStruct(makeKV("f1", 1, "f2", true, "f3", []int{})),
 		exp: `{"f1":1,"f2":true,"f3":[]}`,
 	}, {
-		val: map[TjsontagsString]int{
+		val: map[jsonTagsStringTest]int{
 			{String1: `"quoted"`, String4: `unquoted`}: 1,
 		},
 		exp: `{"{\"string1\":\"\\\"quoted\\\"\",\"-\":\"\",\"string4\":\"unquoted\",\"String5\":\"\"}":1}`,
 	}, {
-		val: map[TjsontagsInt]int{
+		val: map[jsonTagsIntTest]int{
 			{Int1: 1, Int2: 2}: 3,
 		},
 		exp: `{"{\"int1\":1,\"-\":0,\"Int5\":0}":3}`,
@@ -644,27 +622,29 @@ func TestPretty(t *testing.T) {
 	}}
 
 	f := newFormatter(fmtOptions{})
-	for i, tc := range cases {
-		ours := f.pretty(tc.val)
-		want := ""
-		if tc.exp != "" {
-			want = tc.exp
-		} else {
-			jb, err := json.Marshal(tc.val)
-			if err != nil {
-				t.Fatalf("[%d]: unexpected error: %v\nhave: %q", i, err, ours)
+	for _, tc := range testCases {
+		t.Run("", func(t *testing.T) {
+			want := ""
+			have := f.pretty(tc.val)
+
+			if tc.exp != "" {
+				want = tc.exp
+			} else {
+				jb, err := json.Marshal(tc.val)
+				if err != nil {
+					t.Fatalf("unexpected error: %v\nhave: %q", err, have)
+				}
+				want = string(jb)
 			}
-			want = string(jb)
-		}
-		if ours != want {
-			t.Errorf("[%d]:\n\twant %q\n\thave %q", i, want, ours)
-		}
+
+			if have != want {
+				t.Errorf("pretty(...):\n\twant %q\n\thave %q", want, have)
+			}
+		})
 	}
 }
 
-func makeKV(args ...interface{}) []interface{} {
-	return args
-}
+func makeKV(args ...interface{}) []interface{} { return args }
 
 func TestRender(t *testing.T) {
 	testCases := []struct {
@@ -744,7 +724,7 @@ func TestRender(t *testing.T) {
 				formatter.AddValues(tc.values)
 				have := string(bytes.TrimRight(formatter.render(tc.builtins, tc.args), "\n"))
 				if have != want {
-					t.Errorf("wrong output:\nwant %q\nhave %q", want, have)
+					t.Errorf("render(...):\nwant %q\nhave %q", want, have)
 				}
 			}
 			t.Run("KV", func(t *testing.T) {
@@ -790,415 +770,10 @@ func TestSanitize(t *testing.T) {
 	f := newFormatter(fmtOptions{outputFormat: outputJSON})
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := f.sanitize(tc.kv)
-			if !reflect.DeepEqual(r, tc.want) {
-				t.Errorf("wrong output:\nwant %q\nhave %q", tc.want, r)
+			have := f.sanitize(tc.kv)
+			if diff := cmp.Diff(have, tc.want); diff != ""{
+				t.Errorf("sanitize(...) mismatch (-want +have):\n%s", diff)
 			}
 		})
-	}
-}
-
-func TestEnabled(t *testing.T) {
-	t.Run("verbosity none/all", func(t *testing.T) {
-		log := newBasicLogger(newFormatter(fmtOptions{}), io.Discard, VerbosityNone)
-		if log.Enabled() {
-			t.Errorf("want false")
-		}
-		log.setVerbosity(VerbosityAll)
-		if !log.Enabled() {
-			t.Errorf("want true")
-		}
-	})
-}
-
-func TestInfo(t *testing.T) {
-	testCases := []struct {
-		name string
-		args []interface{}
-		want string
-	}{{
-		name: "just msg",
-		args: makeKV(),
-		want: `"level"="info" "logger"="root" "msg"="msg"`,
-	}, {
-		name: "primitives",
-		args: makeKV("int", 1, "str", "ABC", "bool", true),
-		want: `"level"="info" "logger"="root" "msg"="msg" "int"=1 "str"="ABC" "bool"=true`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
-			sink.Info("msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestInfoWithCaller(t *testing.T) {
-	t.Run("logCaller=categoryAll", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll}), bb, VerbosityAll)
-		sink.Info("msg")
-		_, file, line, _ := runtime.Caller(0)
-		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-
-		bb.Reset()
-		sink.Error(fmt.Errorf("error"), "msg")
-		_, file, line, _ = runtime.Caller(0)
-		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=categoryAll, logCallerFunc=true", func(t *testing.T) {
-		thisFunc := "github.com/ethersphere/bee/pkg/log.TestInfoWithCaller.func2"
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, logCallerFunc: true}), bb, VerbosityAll)
-		sink.Info("msg")
-		_, file, line, _ := runtime.Caller(0)
-		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg"`, filepath.Base(file), line-1, thisFunc)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-
-		bb.Reset()
-		sink.Error(fmt.Errorf("error"), "msg")
-		_, file, line, _ = runtime.Caller(0)
-		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d,"function":%q} "msg"="msg" "error"="error"`, filepath.Base(file), line-1, thisFunc)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=Info", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryInfo}), bb, VerbosityAll)
-		sink.Info("msg")
-		_, file, line, _ := runtime.Caller(0)
-		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line-1)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-
-		bb.Reset()
-		sink.Error(fmt.Errorf("error"), "msg")
-		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want = `"level"="error" "logger"="root" "msg"="msg" "error"="error"`
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=Error", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryError}), bb, VerbosityAll)
-		sink.Info("msg")
-		want := `"level"="info" "logger"="root" "msg"="msg"`
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-
-		bb.Reset()
-		sink.Error(fmt.Errorf("error"), "msg")
-		_, file, line, _ := runtime.Caller(0)
-		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want = fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="error"`, filepath.Base(file), line-1)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=noneCaller", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryNone}), bb, VerbosityAll)
-		sink.Info("msg")
-		want := `"level"="info" "logger"="root" "msg"="msg"`
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-
-		bb.Reset()
-		sink.Error(fmt.Errorf("error"), "msg")
-		have = string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want = `"level"="error" "logger"="root" "msg"="msg" "error"="error"`
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-}
-
-func TestError(t *testing.T) {
-	testCases := []struct {
-		name string
-		args []interface{}
-		want string
-	}{{
-		name: "just msg",
-		args: makeKV(),
-		want: `"level"="error" "logger"="root" "msg"="msg" "error"="err"`,
-	}, {
-		name: "primitives",
-		args: makeKV("int", 1, "str", "ABC", "bool", true),
-		want: `"level"="error" "logger"="root" "msg"="msg" "error"="err" "int"=1 "str"="ABC" "bool"=true`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
-			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestErrorWithCaller(t *testing.T) {
-	t.Run("logCaller=categoryAll", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll}), bb, VerbosityAll)
-		sink.Error(fmt.Errorf("err"), "msg")
-		_, file, line, _ := runtime.Caller(0)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=Error", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryError}), bb, VerbosityAll)
-		sink.Error(fmt.Errorf("err"), "msg")
-		_, file, line, _ := runtime.Caller(0)
-		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line-1)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=Info", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryInfo}), bb, VerbosityAll)
-		sink.Error(fmt.Errorf("err"), "msg")
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-	t.Run("logCaller=noneCaller", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryNone}), bb, VerbosityAll)
-		sink.Error(fmt.Errorf("err"), "msg")
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want := `"level"="error" "logger"="root" "msg"="msg" "error"="err"`
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-}
-
-func TestInfoWithName(t *testing.T) {
-	testCases := []struct {
-		name  string
-		names []string
-		args  []interface{}
-		want  string
-	}{{
-		name:  "one",
-		names: []string{"pfx1"},
-		args:  makeKV("k", "v"),
-		want:  `"level"="info" "logger"="root/pfx1" "msg"="msg" "k"="v"`,
-	}, {
-		name:  "two",
-		names: []string{"pfx1", "pfx2"},
-		args:  makeKV("k", "v"),
-		want:  `"level"="info" "logger"="root/pfx1/pfx2" "msg"="msg" "k"="v"`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			var sink Logger = newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
-			for _, n := range tc.names {
-				sink = sink.WithName(n)
-			}
-			sink.Info("msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestErrorWithName(t *testing.T) {
-	testCases := []struct {
-		name  string
-		names []string
-		args  []interface{}
-		want  string
-	}{{
-		name:  "one",
-		names: []string{"pfx1"},
-		args:  makeKV("k", "v"),
-		want:  `"level"="error" "logger"="root/pfx1" "msg"="msg" "error"="err" "k"="v"`,
-	}, {
-		name:  "two",
-		names: []string{"pfx1", "pfx2"},
-		args:  makeKV("k", "v"),
-		want:  `"level"="error" "logger"="root/pfx1/pfx2" "msg"="msg" "error"="err" "k"="v"`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			var sink Logger = newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll)
-			for _, n := range tc.names {
-				sink = sink.WithName(n)
-			}
-			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestInfoWithValues(t *testing.T) {
-	testCases := []struct {
-		name   string
-		values []interface{}
-		args   []interface{}
-		want   string
-	}{{
-		name:   "zero",
-		values: makeKV(),
-		args:   makeKV("k", "v"),
-		want:   `"level"="info" "logger"="root" "msg"="msg" "k"="v"`,
-	}, {
-		name:   "one",
-		values: makeKV("one", 1),
-		args:   makeKV("k", "v"),
-		want:   `"level"="info" "logger"="root" "msg"="msg" "one"=1 "k"="v"`,
-	}, {
-		name:   "two",
-		values: makeKV("one", 1, "two", 2),
-		args:   makeKV("k", "v"),
-		want:   `"level"="info" "logger"="root" "msg"="msg" "one"=1 "two"=2 "k"="v"`,
-	}, {
-		name:   "dangling",
-		values: makeKV("dangling"),
-		args:   makeKV("k", "v"),
-		want:   `"level"="info" "logger"="root" "msg"="msg" "dangling"="<no-value>" "k"="v"`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll).WithValues(tc.values...)
-			sink.Info("msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestErrorWithValues(t *testing.T) {
-	testCases := []struct {
-		name   string
-		values []interface{}
-		args   []interface{}
-		want   string
-	}{{
-		name:   "zero",
-		values: makeKV(),
-		args:   makeKV("k", "v"),
-		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "k"="v"`,
-	}, {
-		name:   "one",
-		values: makeKV("one", 1),
-		args:   makeKV("k", "v"),
-		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "one"=1 "k"="v"`,
-	}, {
-		name:   "two",
-		values: makeKV("one", 1, "two", 2),
-		args:   makeKV("k", "v"),
-		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "one"=1 "two"=2 "k"="v"`,
-	}, {
-		name:   "dangling",
-		values: makeKV("dangling"),
-		args:   makeKV("k", "v"),
-		want:   `"level"="error" "logger"="root" "msg"="msg" "error"="err" "dangling"="<no-value>" "k"="v"`,
-	}}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			bb := new(bytes.Buffer)
-			sink := newBasicLogger(newFormatter(fmtOptions{}), bb, VerbosityAll).WithValues(tc.values...)
-			sink.Error(fmt.Errorf("err"), "msg", tc.args...)
-			have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-			if have != tc.want {
-				t.Errorf("\nwant %q\nhave %q", tc.want, have)
-			}
-		})
-	}
-}
-
-func TestInfoWithCallDepth(t *testing.T) {
-	t.Run("one", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, callerDepth: 1}), bb, VerbosityAll)
-		sink.Info("msg")
-		_, file, line, _ := runtime.Caller(1)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want := fmt.Sprintf(`"level"="info" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg"`, filepath.Base(file), line)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-}
-
-func TestErrorWithCallDepth(t *testing.T) {
-	t.Run("one", func(t *testing.T) {
-		bb := new(bytes.Buffer)
-		sink := newBasicLogger(newFormatter(fmtOptions{logCaller: categoryAll, callerDepth: 1}), bb, VerbosityAll)
-		sink.Error(fmt.Errorf("err"), "msg")
-		_, file, line, _ := runtime.Caller(1)
-		have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-		want := fmt.Sprintf(`"level"="error" "logger"="root" "caller"={"file":%q,"line":%d} "msg"="msg" "error"="err"`, filepath.Base(file), line)
-		if have != want {
-			t.Errorf("\nwant %q\nhave %q", want, have)
-		}
-	})
-}
-
-func TestOptionsTimestampFormat(t *testing.T) {
-	bb := new(bytes.Buffer)
-	//  This timestamp format contains none of the characters that are
-	//  considered placeholders, so will produce a constant result.
-	sink := newBasicLogger(newFormatter(fmtOptions{logTimestamp: true, timestampFormat: "TIMESTAMP", callerDepth: 1}), bb, VerbosityAll)
-	sink.Info("msg")
-	have := string(bytes.TrimRight(bb.Bytes(), "\n"))
-	want := `"time"="TIMESTAMP" "level"="info" "logger"="root" "msg"="msg"`
-	if have != want {
-		t.Errorf("\nwant %q\nhave %q", want, have)
 	}
 }

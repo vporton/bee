@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 	"sync/atomic"
 )
 
@@ -63,6 +64,27 @@ const (
 	VerbosityDebug
 )
 
+// Lock wraps io.Writer in a mutex to make it safe for concurrent use.
+// In particular, *os.Files must be locked before use.
+func Lock(w io.Writer) io.Writer {
+	if _, ok := w.(*lockWriter); ok {
+		return w // No need to layer on another lock.
+	}
+	return &lockWriter{w: w}
+}
+
+type lockWriter struct {
+	sync.Mutex
+	w io.Writer
+}
+
+func (ls *lockWriter) Write(bs []byte) (int, error) {
+	ls.Lock()
+	n, err := ls.w.Write(bs)
+	ls.Unlock()
+	return n, err
+}
+
 // newBasicLogger is a convenient constructor for basicLogger.
 func newBasicLogger(fmt Formatter, sink io.Writer, verbosity Level) *basicLogger {
 	return &basicLogger{
@@ -74,8 +96,10 @@ func newBasicLogger(fmt Formatter, sink io.Writer, verbosity Level) *basicLogger
 
 // basicLogger provides the basic logger functionality.
 type basicLogger struct {
+	// TODO: protect sink.Write with sync.Mutex !?
+
 	// fmt formats logger messages before they are written to the sink.
-	fmt Formatter
+	fmt Formatter // TODO: share formatter by pointer.
 	// sink represents the stream where the logs are written.
 	sink io.Writer
 	// debugL represents the verbosity V level for the debug calls.
@@ -89,6 +113,7 @@ type basicLogger struct {
 
 // clone returns a clone the basicLogger.
 func (l *basicLogger) clone() *basicLogger {
+	// TODO: check in registry if such logger exists (guard with lock)?
 	c := *l
 	return &c
 }
