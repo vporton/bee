@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"regexp"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/gorilla/mux"
@@ -426,7 +428,15 @@ func (s *server) serveManifestEntry(
 func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, reference swarm.Address, additionalHeaders http.Header, etag bool) {
 	logger := tracing.NewLoggerWithTraceID(r.Context(), s.logger)
 
-	reader, l, err := joiner.New(r.Context(), s.storer, reference)
+	var reader interface {
+		io.ReadSeeker
+		// langos.Reader
+		// io.Reader
+		io.ReaderAt
+	}
+	var l int64
+	var err error
+	reader, l, err = joiner.New(r.Context(), s.storer, reference)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			logger.Debugf("api download: not found %s: %v", reference, err)
@@ -440,6 +450,20 @@ func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, referen
 		return
 	}
 
+	if rangeArray, ok := r.Header["Range"]; ok {
+		if len(rangeArray) >= 1 {
+			range_ := rangeArray[0]
+			// TODO: Compile the regexp outside.
+			r, _ := regexp.Compile("^bytes=([0-9])+-([0-9])+$") // Only this format is used by HTTPFS. // TODO: Support other formats.
+			m := r.FindStringSubmatch(range_)
+			if len(m) == 3 {
+				start, _ := strconv.ParseInt(m[1], 10, 64)
+				end, _ := strconv.ParseInt(m[2], 10, 64)
+				reader = io.NewSectionReader(reader, start, end - start + 1)
+			}
+		}
+	}
+
 	// include additional headers
 	for name, values := range additionalHeaders {
 		w.Header().Set(name, strings.Join(values, "; "))
@@ -450,7 +474,8 @@ func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, referen
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", l))
 	w.Header().Set("Decompressed-Content-Length", fmt.Sprintf("%d", l))
 	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
-	http.ServeContent(w, r, "", time.Now(), langos.NewBufferedLangos(reader, lookaheadBufferSize(l)))
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, "", time.Now(), langos.NewBufferedLangos(reader, lookaheadBufferSize(l))) // TODO: Reduce buffer size for small ranges.
 }
 
 // manifestMetadataLoad returns the value for a key stored in the metadata of
