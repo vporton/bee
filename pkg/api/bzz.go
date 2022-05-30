@@ -459,7 +459,8 @@ func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, referen
 			if len(m) == 3 {
 				start, _ := strconv.ParseInt(m[1], 10, 64)
 				end, _ := strconv.ParseInt(m[2], 10, 64)
-				reader = io.NewSectionReader(reader, start, end - start + 1)
+				l = end - start + 1
+				reader = io.NewSectionReader(reader, start, l)
 			}
 		}
 	}
